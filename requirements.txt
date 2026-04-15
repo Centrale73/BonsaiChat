@@ -1,0 +1,9 @@
+customtkinter
+agno
+sqlalchemy
+openai
+lancedb
+fastembed
+pypdf
+pandas
+aiofiles

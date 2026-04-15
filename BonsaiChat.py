@@ -5,7 +5,81 @@ import sys
 import os
 import atexit
 import time
-from openai import OpenAI
+import tkinter.filedialog as filedialog
+from typing import List, Optional
+
+from agno.agent import Agent
+from agno.db.sqlite import SqliteDb
+from agno.models.llama_cpp import LlamaCpp
+from agno.memory import MemoryManager
+from agno.knowledge.knowledge import Knowledge
+from agno.vectordb.lancedb import LanceDb
+from agno.knowledge.embedder.fastembed import FastEmbedEmbedder
+from agno.knowledge.reader.pdf_reader import PDFReader
+from agno.knowledge.reader.csv_reader import CSVReader
+from agno.knowledge.reader.text_reader import TextReader
+from agno.knowledge.chunking.recursive import RecursiveChunking
+
+# --- RAG configuration ---
+app_data = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory_data")
+os.makedirs(app_data, exist_ok=True)
+LANCE_URI = os.path.join(app_data, "lancedb")
+DEFAULT_CHUNKER = RecursiveChunking(chunk_size=1000, overlap=150)
+
+_knowledge: Optional[Knowledge] = None
+
+def _get_knowledge() -> Knowledge:
+    global _knowledge
+    if _knowledge is None:
+        _knowledge = Knowledge(
+            vector_db=LanceDb(
+                table_name="user_documents",
+                uri=LANCE_URI,
+                embedder=FastEmbedEmbedder(
+                    id="BAAI/bge-small-en-v1.5",
+                    dimensions=384,
+                ),
+            ),
+        )
+    return _knowledge
+
+def ingest_files(file_paths: List[str]) -> bool:
+    ingested_count = 0
+    for path in file_paths:
+        name = os.path.basename(path)
+        try:
+            if name.lower().endswith(".pdf"):
+                reader = PDFReader(chunking_strategy=DEFAULT_CHUNKER)
+            elif name.lower().endswith(".csv"):
+                reader = CSVReader(chunking_strategy=DEFAULT_CHUNKER)
+            elif name.lower().endswith((".txt", ".md", ".py", ".js", ".json")):
+                reader = TextReader(chunking_strategy=DEFAULT_CHUNKER)
+            else:
+                print(f"Unsupported file type: {name}")
+                continue
+
+            _get_knowledge().insert(
+                path=path,
+                name=name,
+                reader=reader,
+                metadata={"filename": name},
+                upsert=True,
+            )
+            ingested_count += 1
+        except Exception as e:
+            print(f"Error processing {name}: {e}")
+
+    return ingested_count > 0
+
+def clear_knowledge_base() -> bool:
+    try:
+        if _get_knowledge().vector_db.exists():
+            _get_knowledge().vector_db.drop()
+        _get_knowledge().vector_db.create()
+        return True
+    except Exception as e:
+        print(f"Error clearing knowledge base: {e}")
+        return False
 
 # Configure UI theme
 ctk.set_appearance_mode("Dark")
@@ -15,14 +89,28 @@ class BonsaiChatApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        self.title("Bonsai Chat (1-bit LLM)")
-        self.geometry("800x600")
+        self.title("Bonsai Chat (1-bit LLM + RAG)")
+        self.geometry("900x600")
         self.grid_rowconfigure(0, weight=1)
-        self.grid_columnconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=0) # Sidebar should not expand
+        self.grid_columnconfigure(1, weight=1) # Main frame should expand
+        
+        # Sidebar Frame for RAG Controls
+        self.sidebar_frame = ctk.CTkFrame(self, width=200, corner_radius=0)
+        self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
+        
+        self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="Knowledge Base", font=ctk.CTkFont(size=20, weight="bold"))
+        self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 20))
+        
+        self.upload_btn = ctk.CTkButton(self.sidebar_frame, text="Upload File", command=self.upload_document)
+        self.upload_btn.grid(row=1, column=0, padx=20, pady=10)
+        
+        self.clear_kb_btn = ctk.CTkButton(self.sidebar_frame, text="Clear Data", command=self.clear_knowledge, fg_color="#a83232", hover_color="#822020")
+        self.clear_kb_btn.grid(row=2, column=0, padx=20, pady=10)
         
         # Main Frame
         self.main_frame = ctk.CTkFrame(self)
-        self.main_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        self.main_frame.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
         self.main_frame.grid_rowconfigure(0, weight=1)
         self.main_frame.grid_columnconfigure(0, weight=1)
         
@@ -48,16 +136,41 @@ class BonsaiChatApp(ctk.CTk):
 
         # State Variables
         self.server_process = None
-        self.messages = [
-            {"role": "system", "content": "You are a helpful and intelligent assistant."}
-        ]
         self.is_server_ready = False
+        self.user_id = "local_dev_user"
         
-        # OpenAI Client (connected to local server once it's up)
-        self.client = OpenAI(base_url="http://127.0.0.1:8081/v1", api_key="not-needed")
+        # Setup local SQLite database for persistence
+        self.db = SqliteDb(db_file="paramodus_memory.db")
+
+        # Configure the Memory Manager
+        self.memory_manager = MemoryManager(
+            db=self.db,
+            additional_instructions="Extract strictly factual statements about the user's preferences, projects, and constraints. Do not store conversational filler."
+        )
+
+        # We defer Agent initialization to start_server thread to prevent GUI lockup
+        self.agent = None
 
         # Launch server
         threading.Thread(target=self.start_server, daemon=True).start()
+
+    def init_agent(self):
+        """Initialize the agent with RAG after server loads."""
+        self.agent = Agent(
+            model=LlamaCpp(
+                id="bonsai-8b", 
+                base_url="http://127.0.0.1:8081/v1" 
+            ),
+            db=self.db,
+            memory_manager=self.memory_manager,
+            update_memory_on_run=True,
+            add_memories_to_context=True,
+            add_history_to_context=True,
+            instructions="You are a helpful and intelligent assistant with access to uploaded documents. Format all mathematical equations using proper LaTeX syntax (e.g., $$...$$ for block equations).",
+            knowledge=_get_knowledge(),
+            search_knowledge=True,
+            markdown=True
+        )
 
     def determine_paths(self):
         if getattr(sys, 'frozen', False):
@@ -110,7 +223,9 @@ class BonsaiChatApp(ctk.CTk):
                     return
                 if "server is listening on" in line:
                     self.is_server_ready = True
-                    self.append_text("System: 🟢 Server is ready! You can now chat.\n\n", "System")
+                    self.append_text("System: 🟢 Server is ready! Loading RAG engine...\n", "System")
+                    self.init_agent()
+                    self.append_text("System: 🟢 Knowledge Base linked. You can now chat and upload files.\n\n", "System")
                     break
         except Exception as e:
             self.append_text(f"\nSystem Error launching server: {e}\n")
@@ -128,7 +243,7 @@ class BonsaiChatApp(ctk.CTk):
         self.chat_history.configure(state="disabled")
 
     def send_message(self):
-        if not self.is_server_ready:
+        if not self.is_server_ready or self.agent is None:
             return
             
         user_input = self.entry.get().strip()
@@ -137,32 +252,21 @@ class BonsaiChatApp(ctk.CTk):
             
         self.entry.delete(0, 'end')
         self.append_text(user_input + "\n", "You")
-        self.messages.append({"role": "user", "content": user_input})
         
         self.send_btn.configure(state="disabled")
         self.append_text("", "Bonsai") # Start the AI message line
         
         # Thread for streaming response
-        threading.Thread(target=self.generate_response, daemon=True).start()
+        threading.Thread(target=self.generate_response, args=(user_input,), daemon=True).start()
 
-    def generate_response(self):
+    def generate_response(self, user_input):
         try:
-            response = self.client.chat.completions.create(
-                model="Bonsai-8B",
-                messages=self.messages,
-                stream=True,
-                temperature=0.7
-            )
-            
-            full_reply = ""
-            for chunk in response:
-                if chunk.choices[0].delta.content is not None:
-                    text_chunk = chunk.choices[0].delta.content
-                    full_reply += text_chunk
+            for chunk in self.agent.run(user_input, user_id=self.user_id, stream=True):
+                if chunk.content:
+                    text_chunk = chunk.content
                     # Safely push to UI thread
                     self.after(0, self.append_text, text_chunk)
             
-            self.messages.append({"role": "assistant", "content": full_reply})
             self.after(0, self.append_text, "\n\n")
             
         except Exception as e:
@@ -170,6 +274,39 @@ class BonsaiChatApp(ctk.CTk):
             
         finally:
             self.after(0, lambda: self.send_btn.configure(state="normal"))
+
+    def upload_document(self):
+        if not self.is_server_ready:
+            self.append_text("System: Please wait for the knowledge base to load...\n", "System")
+            return
+            
+        file_path = filedialog.askopenfilename(
+            title="Select a Document",
+            filetypes=(("PDF Files", "*.pdf"), ("CSV Files", "*.csv"), ("Text Files", "*.txt;*.md;*.py;*.json"), ("All Files", "*.*"))
+        )
+        if file_path:
+            self.append_text(f"System: Uploading {os.path.basename(file_path)} into Knowledge Base...\n", "System")
+            threading.Thread(target=self._process_upload, args=(file_path,), daemon=True).start()
+
+    def _process_upload(self, file_path):
+        success = ingest_files([file_path])
+        if success:
+            self.after(0, self.append_text, f"System: ✓ Successfully ingested {os.path.basename(file_path)}\n", "System")
+        else:
+            self.after(0, self.append_text, f"System: ⚠ Failed to ingest {os.path.basename(file_path)}\n", "System")
+
+    def clear_knowledge(self):
+        if not self.is_server_ready:
+            return
+        self.append_text("System: Clearing knowledge base...\n", "System")
+        threading.Thread(target=self._process_clear, daemon=True).start()
+
+    def _process_clear(self):
+        success = clear_knowledge_base()
+        if success:
+            self.after(0, self.append_text, "System: ✓ Knowledge base cleared successfully.\n", "System")
+        else:
+            self.after(0, self.append_text, "System: ⚠ Error clearing knowledge base.\n", "System")
 
     def destroy(self):
         # Cleanup when window shuts
