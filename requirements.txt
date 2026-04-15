@@ -1,9 +1,11 @@
-customtkinter
 agno
-sqlalchemy
+aiofiles
+pywebview
 openai
+pydantic
+python-dotenv
+sqlalchemy
+pypdf
 lancedb
 fastembed
-pypdf
 pandas
-aiofiles
