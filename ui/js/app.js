@@ -239,50 +239,23 @@ function animateHeader() {
 // ========================================
 // SETTINGS & CONFIGURATION
 // ========================================
-async function toggleAgents() {
-    const enabled = document.getElementById('agent-toggle').checked;
-    await window.pywebview.api.toggle_multi_agent(enabled);
-}
-
-async function updateProvider() {
-    const p = document.getElementById('provider-select').value;
-    await window.pywebview.api.set_provider(p);
-
-    // Show/hide cloud API section vs Bonsai panel
-    const isLocal = (p === 'bonsai');
-    document.getElementById('cloud-api-section').style.display = isLocal ? 'none' : 'block';
-    document.getElementById('bonsai-panel').style.display      = isLocal ? 'block' : 'none';
-
-    if (isLocal) {
-        await triggerBonsaiAutoSetup();
-    }
-}
-
-async function updateModel() {
-    const m = document.getElementById('model-input').value;
-    await window.pywebview.api.set_model(m);
-}
-
 // ========================================
-// CUSTOM PROVIDER DROPDOWN
+// LANGUAGE SELECTION
 // ========================================
-function toggleProviderDropdown() {
-    const dropdown = document.getElementById('provider-dropdown');
+
+function toggleLanguageDropdown() {
+    const dropdown = document.getElementById('language-dropdown');
     dropdown.classList.toggle('open');
 }
 
-function selectProvider(value, label) {
-    const dropdown = document.getElementById('provider-dropdown');
+async function selectLanguage(value, label) {
+    const dropdown = document.getElementById('language-dropdown');
     const selected = dropdown.querySelector('.dropdown-selected');
     const selectedText = selected.querySelector('.selected-text');
-    const hiddenInput = document.getElementById('provider-select');
 
     // Update selected display
     selected.setAttribute('data-value', value);
     selectedText.textContent = label;
-
-    // Update hidden input
-    hiddenInput.value = value;
 
     // Update selected class on options
     dropdown.querySelectorAll('.dropdown-option').forEach(opt => {
@@ -292,28 +265,18 @@ function selectProvider(value, label) {
     // Close dropdown
     dropdown.classList.remove('open');
 
-    // Trigger provider update
-    updateProvider();
+    // Trigger API call
+    console.log("Setting language to:", value);
+    await window.pywebview.api.set_language(value);
 }
 
 // Close dropdown when clicking outside
 document.addEventListener('click', (e) => {
-    const dropdown = document.getElementById('provider-dropdown');
+    const dropdown = document.getElementById('language-dropdown');
     if (dropdown && !dropdown.contains(e.target)) {
         dropdown.classList.remove('open');
     }
 });
-
-async function saveKey() {
-    const k = document.getElementById('api-key').value;
-    const p = document.getElementById('provider-select').value;
-    if (!k) {
-        alert("Please enter a key");
-        return;
-    }
-    const res = await window.pywebview.api.set_api_key(k, p);
-    alert(res);
-}
 
 // ========================================
 // RAG / FILE HANDLING

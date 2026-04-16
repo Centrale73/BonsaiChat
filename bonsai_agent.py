@@ -114,12 +114,23 @@ def init_agent() -> None:
     )
 
 
-def get_agent(session_id: str) -> Agent:
-    """Return the global agent, initialising it if necessary."""
+def get_agent(session_id: str, language: str = 'en') -> Agent:
+    """Return the global agent, initialising it if necessary, and update its language."""
     if _agent is None:
         init_agent()
     # Agno agents carry session context via the DB; just tag the run
     _agent.session_id = session_id
+    
+    # Update language instructions
+    base_instructions = "You are a helpful and intelligent assistant with access to uploaded documents. Format all mathematical equations using proper LaTeX syntax (e.g., $$...$$ for block equations)."
+    
+    if language == 'fr':
+        _agent.instructions = base_instructions + " You MUST reply entirely in French (Français)."
+    elif language == 'es':
+        _agent.instructions = base_instructions + " You MUST reply entirely in Spanish (Español)."
+    else:
+        _agent.instructions = base_instructions
+        
     return _agent
 
 

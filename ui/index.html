@@ -25,49 +25,20 @@
         <!-- View: Settings -->
         <div id="view-settings" class="sidebar-view" style="display:none;">
             <div class="config-section">
-                <label class="config-label">Provider</label>
-                <div class="custom-dropdown" id="provider-dropdown">
-                    <div class="dropdown-selected" data-value="bonsai" onclick="toggleProviderDropdown()">
-                        <span class="selected-text">🌿 Bonsai 8B (Local)</span>
+                <label class="config-label">Language</label>
+                <div class="custom-dropdown" id="language-dropdown">
+                    <div class="dropdown-selected" data-value="en" onclick="toggleLanguageDropdown()">
+                        <span class="selected-text" id="lang-selected-text">English (EN)</span>
                     </div>
-                    <div class="dropdown-options">
-                        <div class="dropdown-option" data-value="openai"
-                            onclick="selectProvider('openai', 'OpenAI')">
-                            OpenAI</div>
-                        <div class="dropdown-option" data-value="anthropic"
-                            onclick="selectProvider('anthropic', 'Anthropic')">
-                            Anthropic</div>
-                        <div class="dropdown-option" data-value="gemini" onclick="selectProvider('gemini', 'Gemini')">
-                            Gemini
-                        </div>
-                        <div class="dropdown-option" data-value="grok" onclick="selectProvider('grok', 'Grok (xAI)')">
-                            Grok
-                            (xAI)</div>
-                        <div class="dropdown-option" data-value="groq" onclick="selectProvider('groq', 'Groq')">Groq
-                        </div>
-                        <div class="dropdown-option" data-value="openrouter"
-                            onclick="selectProvider('openrouter', 'OpenRouter')">OpenRouter</div>
-                        <div class="dropdown-option" data-value="perplexity"
-                            onclick="selectProvider('perplexity', 'Perplexity')">Perplexity</div>
-                        <div class="dropdown-option selected" data-value="bonsai"
-                            onclick="selectProvider('bonsai', '🌿 Bonsai 8B (Local)')">🌿 Bonsai 8B (Local)</div>
+                    <div class="dropdown-options" id="lang-options">
+                        <div class="dropdown-option selected" data-value="en" onclick="selectLanguage('en', 'English (EN)')">English (EN)</div>
+                        <div class="dropdown-option" data-value="fr" onclick="selectLanguage('fr', 'Français (FR)')">Français (FR)</div>
+                        <div class="dropdown-option" data-value="es" onclick="selectLanguage('es', 'Español (ES)')">Español (ES)</div>
                     </div>
                 </div>
-                <input type="hidden" id="provider-select" value="bonsai">
 
-                <label class="config-label">Model ID (Optional)</label>
-                <input type="text" id="model-input" class="config-input" placeholder="e.g. gpt-4o"
-                    onchange="updateModel()">
-
-                <!-- Cloud provider: API Key input -->
-                <div id="cloud-api-section" style="display:none;">
-                    <label class="config-label">API Key</label>
-                    <input type="password" id="api-key" class="config-input" placeholder="sk-...">
-                    <button class="btn-save" onclick="saveKey()">Save Configuration</button>
-                </div>
-
-                <!-- Local model: Bonsai panel (shown when bonsai is selected) -->
-                <div id="bonsai-panel">
+                <!-- Local model: Bonsai panel -->
+                <div id="bonsai-panel" style="margin-top: 20px;">
                     <div class="bonsai-status-bar" id="bonsai-status-bar">
                         <span id="bonsai-status-dot" class="status-dot status-offline"></span>
                         <span id="bonsai-status-text">Setting up…</span>
@@ -118,8 +89,6 @@
             <div class="logo">🌿 BonsaiChat</div>
             <div class="header-controls">
                 <button class="new-chat-btn" onclick="newChat()" title="Start a new conversation">+ New Chat</button>
-                <span>Multi-Agent:</span>
-                <input type="checkbox" id="agent-toggle" onchange="toggleAgents()">
             </div>
         </div>
 

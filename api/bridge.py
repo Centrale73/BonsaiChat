@@ -60,6 +60,7 @@ class ApiBridge:
         self._server_process: Optional[subprocess.Popen] = None
         self._server_ready = False
         self._agent = None
+        self.current_language = "en"
 
     def set_window(self, window):
         self.window = window
@@ -88,22 +89,12 @@ class ApiBridge:
         return get_history(self.current_session_id)
 
     # ------------------------------------------------------------------
-    # Provider / model stubs — BonsaiChat is local-only.
-    # These keep the Paramodus UI happy without breaking anything.
+    # Settings & Configuration
     # ------------------------------------------------------------------
 
-    def set_api_key(self, key: str, provider: str = "bonsai"):
-        return "BonsaiChat runs fully local — no API key needed."
-
-    def set_provider(self, provider: str):
-        # Only 'bonsai' is supported; silently accept the call.
-        return f"Provider: {provider} (local only)"
-
-    def set_model(self, model_id: str):
-        return f"Model set to {model_id or 'Bonsai-8B'}"
-
-    def toggle_multi_agent(self, enabled: bool):
-        return f"Multi-Agent: {'Enabled' if enabled else 'Disabled'}"
+    def set_language(self, language: str):
+        self.current_language = language
+        return f"Language set to: {language.upper()}"
 
     # ------------------------------------------------------------------
     # Local model / server lifecycle
@@ -280,7 +271,7 @@ class ApiBridge:
 
     def _run_chat(self, user_text: str, target_id: str):
         try:
-            agent = _agent_module().get_agent(self.current_session_id)
+            agent = _agent_module().get_agent(self.current_session_id, self.current_language)
             full_response = ""
 
             run_response = agent.run(user_text, stream=True)
