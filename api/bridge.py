@@ -300,6 +300,97 @@ class ApiBridge:
                 self.window.evaluate_js(f"receiveError({json.dumps(str(e))})")
 
     # ------------------------------------------------------------------
+    # File Organizer
+    # ------------------------------------------------------------------
+
+    def organizer_scan(self, source_folder: str) -> dict:
+        """
+        Scan a folder for PDFs and return document list.
+        Called from the Organizer tab after the user picks a source folder.
+        """
+        try:
+            import organizer_agent
+            return organizer_agent.scan_folder(source_folder)
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def organizer_categorize_all(self, documents_json: str) -> dict:
+        """
+        Categorize all scanned documents via the local Bonsai model.
+        Streams per-document progress back to JS via onOrganizerProgress.
+        documents_json: JSON string of the documents list from organizer_scan.
+        """
+        try:
+            import organizer_agent
+            documents = json.loads(documents_json) if isinstance(documents_json, str) else documents_json
+
+            results = []
+            total = len(documents)
+
+            for i, doc in enumerate(documents):
+                updated = organizer_agent.categorize_document(doc)
+                results.append(updated)
+
+                # Push progress to JS
+                if self.window:
+                    payload = json.dumps({
+                        "index": i,
+                        "total": total,
+                        "doc": updated,
+                    })
+                    self.window.evaluate_js(f"onOrganizerProgress({payload})")
+
+            return {"status": "success", "documents": results}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def organizer_categorize_all_async(self, documents_json: str):
+        """
+        Non-blocking version — runs categorization in a background thread
+        so the UI stays responsive during long batch runs.
+        """
+        threading.Thread(
+            target=self._organizer_categorize_worker,
+            args=(documents_json,),
+            daemon=True,
+            name="organizer-categorize",
+        ).start()
+        return {"status": "started"}
+
+    def _organizer_categorize_worker(self, documents_json: str):
+        try:
+            import organizer_agent
+            documents = json.loads(documents_json) if isinstance(documents_json, str) else documents_json
+            total = len(documents)
+
+            for i, doc in enumerate(documents):
+                updated = organizer_agent.categorize_document(doc)
+
+                if self.window:
+                    payload = json.dumps({"index": i, "total": total, "doc": updated})
+                    self.window.evaluate_js(f"onOrganizerProgress({payload})")
+
+            if self.window:
+                self.window.evaluate_js("onOrganizerCategorizeComplete()")
+
+        except Exception as e:
+            if self.window:
+                self.window.evaluate_js(
+                    f"onOrganizerError({json.dumps(str(e))})"
+                )
+
+    def organizer_organize(self, documents_json: str, target_folder: str, copy_files: bool = True) -> dict:
+        """
+        Move/copy categorized documents into the target folder structure.
+        """
+        try:
+            import organizer_agent
+            documents = json.loads(documents_json) if isinstance(documents_json, str) else documents_json
+            return organizer_agent.organize_documents(documents, target_folder, copy_files)
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    # ------------------------------------------------------------------
     # Tone detection (carried over from Paramodus)
     # ------------------------------------------------------------------
 

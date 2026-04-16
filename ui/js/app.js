@@ -664,3 +664,249 @@ async function retryBonsaiSetup() {
     _bonsaiSetupTriggered = false;
     await triggerBonsaiAutoSetup();
 }
+
+
+// ========================================
+// FILE ORGANIZER
+// ========================================
+
+let orgDocuments = [];
+let orgSourceFolder = '';
+let orgTargetFolder = '';
+
+function toggleOrganizerPanel() {
+    const panel = document.getElementById('organizer-panel');
+    const tab = document.getElementById('tab-organizer');
+    const isVisible = panel.style.display !== 'none';
+    panel.style.display = isVisible ? 'none' : 'flex';
+    tab.classList.toggle('active', !isVisible);
+}
+
+// Folder picker — uses a hidden <input type="file" webkitdirectory>
+function orgPickFolder(which) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.webkitdirectory = true;
+    input.style.display = 'none';
+    document.body.appendChild(input);
+
+    input.addEventListener('change', () => {
+        if (input.files.length === 0) return;
+        // Derive the folder path from the first file's webkitRelativePath
+        const firstFile = input.files[0];
+        // webkitRelativePath = "FolderName/file.pdf" — we need the absolute path.
+        // pywebview exposes the absolute path via a special attribute on the File object.
+        // Fallback: use the relative root folder name as a label.
+        const folderPath = firstFile.path
+            ? firstFile.path.substring(0, firstFile.path.lastIndexOf(firstFile.name) - 1)
+            : firstFile.webkitRelativePath.split('/')[0];
+
+        if (which === 'source') {
+            orgSourceFolder = folderPath;
+            document.getElementById('org-source-path').value = folderPath;
+        } else {
+            orgTargetFolder = folderPath;
+            document.getElementById('org-target-path').value = folderPath;
+        }
+        document.body.removeChild(input);
+    });
+
+    input.click();
+}
+
+function orgSetStatus(msg) {
+    document.getElementById('org-status').textContent = msg;
+}
+
+function orgSetButtons(scanning, categorizing, canCategorize, canOrganize) {
+    document.getElementById('org-btn-scan').disabled = scanning;
+    document.getElementById('org-btn-categorize').disabled = categorizing || !canCategorize;
+    document.getElementById('org-btn-organize').disabled = !canOrganize;
+}
+
+// Scan
+async function orgScan() {
+    if (!orgSourceFolder) {
+        orgSetStatus('Please select a source folder first.');
+        return;
+    }
+    orgSetStatus('Scanning for PDFs…');
+    orgSetButtons(true, false, false, false);
+    orgClearTable();
+    orgDocuments = [];
+
+    try {
+        const result = await window.pywebview.api.organizer_scan(orgSourceFolder);
+        if (result.status !== 'success') {
+            orgSetStatus('Error: ' + result.message);
+            orgSetButtons(false, false, false, false);
+            return;
+        }
+        orgDocuments = result.documents;
+        orgRenderTable(orgDocuments);
+        orgSetStatus(`Scanned ${result.readable} of ${result.total} PDF(s). Ready to categorize.`);
+        orgSetButtons(false, false, orgDocuments.length > 0, false);
+
+        if (result.scan_errors && result.scan_errors.length > 0) {
+            console.warn('Scan errors:', result.scan_errors);
+        }
+    } catch (e) {
+        orgSetStatus('Scan failed: ' + e);
+        orgSetButtons(false, false, false, false);
+    }
+}
+
+// Categorize (async — streams progress via onOrganizerProgress)
+async function orgCategorize() {
+    if (orgDocuments.length === 0) return;
+
+    orgSetStatus('Categorizing with Bonsai…');
+    orgSetButtons(true, true, false, false);
+    orgShowProgress(true);
+    orgUpdateProgress(0, orgDocuments.length);
+
+    try {
+        await window.pywebview.api.organizer_categorize_all_async(JSON.stringify(orgDocuments));
+        // Completion comes via onOrganizerCategorizeComplete()
+    } catch (e) {
+        orgSetStatus('Categorization failed: ' + e);
+        orgSetButtons(false, false, true, false);
+        orgShowProgress(false);
+    }
+}
+
+// Called from Python bridge for each doc as it finishes
+function onOrganizerProgress(payload) {
+    const { index, total, doc } = payload;
+    orgUpdateProgress(index + 1, total);
+    orgSetStatus(`Categorizing… ${index + 1} / ${total}: ${doc.filename}`);
+
+    // Update the local document state
+    if (orgDocuments[index]) {
+        orgDocuments[index] = doc;
+    }
+    orgUpdateTableRow(index, doc);
+}
+
+function onOrganizerCategorizeComplete() {
+    orgSetStatus('Categorization complete. Review and click Organize.');
+    orgSetButtons(false, false, false, orgTargetFolder.length > 0);
+    orgShowProgress(false);
+    orgRenderCategoryChips();
+
+    // Enable organize if target folder is already set
+    document.getElementById('org-btn-organize').disabled = !orgTargetFolder;
+}
+
+function onOrganizerError(msg) {
+    orgSetStatus('Error: ' + msg);
+    orgSetButtons(false, false, true, false);
+    orgShowProgress(false);
+}
+
+// Organize
+async function orgOrganize() {
+    if (!orgTargetFolder) {
+        orgSetStatus('Please select a target folder first.');
+        return;
+    }
+    const copyFiles = document.getElementById('org-copy-files').checked;
+    orgSetStatus('Organizing files…');
+    orgSetButtons(true, true, false, false);
+
+    try {
+        const result = await window.pywebview.api.organizer_organize(
+            JSON.stringify(orgDocuments),
+            orgTargetFolder,
+            copyFiles
+        );
+
+        if (result.status === 'success') {
+            orgSetStatus(
+                `Done. ${result.organized} file(s) ${copyFiles ? 'copied' : 'moved'}.` +
+                (result.failed > 0 ? ` ${result.failed} failed.` : '')
+            );
+            // Refresh statuses in table
+            if (result.details) {
+                result.details.forEach((doc, i) => {
+                    const idx = orgDocuments.findIndex(d => d.filepath === doc.filepath);
+                    if (idx !== -1) {
+                        orgDocuments[idx] = doc;
+                        orgUpdateTableRow(idx, doc);
+                    }
+                });
+            }
+        } else {
+            orgSetStatus('Organize error: ' + result.message);
+        }
+        orgSetButtons(false, false, false, false);
+    } catch (e) {
+        orgSetStatus('Organize failed: ' + e);
+        orgSetButtons(false, false, false, true);
+    }
+}
+
+// ---- Table helpers ----
+
+function orgClearTable() {
+    const tbody = document.getElementById('org-table-body');
+    tbody.innerHTML = '<tr><td colspan="5" class="org-empty">No documents scanned yet.</td></tr>';
+    document.getElementById('org-category-chips').innerHTML = '';
+}
+
+function orgRenderTable(docs) {
+    const tbody = document.getElementById('org-table-body');
+    if (!docs || docs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="org-empty">No PDFs found.</td></tr>';
+        return;
+    }
+    tbody.innerHTML = docs.map((doc, i) => orgRowHTML(i, doc)).join('');
+}
+
+function orgRowHTML(i, doc) {
+    const conf = doc.confidence > 0 ? `${doc.confidence}%` : '—';
+    const confClass = doc.confidence >= 80 ? 'conf-high' : doc.confidence >= 50 ? 'conf-mid' : 'conf-low';
+    const statusClass = doc.status === 'Categorized' ? 'status-ok'
+        : doc.status === 'Scanned' ? 'status-scan'
+        : doc.status === 'Copied' || doc.status === 'Moved' ? 'status-done'
+        : 'status-err';
+    return `<tr id="org-row-${i}">
+        <td class="org-td-file" title="${doc.filepath}">${doc.filename}</td>
+        <td>${doc.category || '—'}</td>
+        <td>${doc.subcategory || '—'}</td>
+        <td class="${confClass}">${conf}</td>
+        <td class="${statusClass}">${doc.status}</td>
+    </tr>`;
+}
+
+function orgUpdateTableRow(index, doc) {
+    const row = document.getElementById(`org-row-${index}`);
+    if (row) {
+        row.outerHTML = orgRowHTML(index, doc);
+    }
+}
+
+function orgRenderCategoryChips() {
+    const counts = {};
+    orgDocuments.forEach(d => {
+        const cat = d.category || 'Other';
+        counts[cat] = (counts[cat] || 0) + 1;
+    });
+    const container = document.getElementById('org-category-chips');
+    container.innerHTML = Object.entries(counts)
+        .sort((a, b) => b[1] - a[1])
+        .map(([cat, n]) => `<span class="org-chip">${cat} <strong>${n}</strong></span>`)
+        .join('');
+}
+
+// ---- Progress ----
+
+function orgShowProgress(show) {
+    document.getElementById('org-progress-wrap').style.display = show ? 'flex' : 'none';
+}
+
+function orgUpdateProgress(done, total) {
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    document.getElementById('org-progress-fill').style.width = pct + '%';
+    document.getElementById('org-progress-label').textContent = `${done} / ${total}`;
+}

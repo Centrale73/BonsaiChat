@@ -81,6 +81,13 @@
                 </path>
             </svg>
         </div>
+        <!-- Organizer Toggle (Folder) -->
+        <div class="sidebar-toggle-tab" onclick="toggleOrganizerPanel()" id="tab-organizer" title="File Organizer">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+            </svg>
+        </div>
     </div>
 
     <!-- Main Content -->
@@ -121,6 +128,76 @@
             </div>
             <div id="setup-overlay-label" class="setup-progress-label">Preparing…</div>
         </div>
+    </div>
+
+
+    <!-- ============================================================ -->
+    <!-- File Organizer Panel (slides in from right, over main)       -->
+    <!-- ============================================================ -->
+    <div id="organizer-panel" class="organizer-panel" style="display:none;">
+        <div class="organizer-header">
+            <span class="organizer-title">&#128193; File Organizer</span>
+            <button class="organizer-close-btn" onclick="toggleOrganizerPanel()">&#215;</button>
+        </div>
+
+        <!-- Folder pickers -->
+        <div class="org-section">
+            <label class="org-label">Source Folder (PDFs)</label>
+            <div class="org-folder-row">
+                <input type="text" id="org-source-path" class="org-path-input" readonly placeholder="No folder selected">
+                <button class="org-btn org-btn-secondary" onclick="orgPickFolder('source')">Browse</button>
+            </div>
+
+            <label class="org-label" style="margin-top:12px;">Target Folder</label>
+            <div class="org-folder-row">
+                <input type="text" id="org-target-path" class="org-path-input" readonly placeholder="No folder selected">
+                <button class="org-btn org-btn-secondary" onclick="orgPickFolder('target')">Browse</button>
+            </div>
+
+            <div class="org-option-row">
+                <input type="checkbox" id="org-copy-files" checked>
+                <label for="org-copy-files">Keep originals (copy instead of move)</label>
+            </div>
+        </div>
+
+        <!-- Action buttons -->
+        <div class="org-actions">
+            <button class="org-btn org-btn-primary" id="org-btn-scan" onclick="orgScan()">Scan PDFs</button>
+            <button class="org-btn org-btn-primary" id="org-btn-categorize" onclick="orgCategorize()" disabled>Categorize</button>
+            <button class="org-btn org-btn-success" id="org-btn-organize" onclick="orgOrganize()" disabled>Organize</button>
+        </div>
+
+        <!-- Status bar -->
+        <div id="org-status" class="org-status">Ready. Select a source folder and scan.</div>
+
+        <!-- Progress bar (hidden until categorizing) -->
+        <div id="org-progress-wrap" class="org-progress-wrap" style="display:none;">
+            <div class="org-progress-bg">
+                <div class="org-progress-fill" id="org-progress-fill" style="width:0%"></div>
+            </div>
+            <span id="org-progress-label" class="org-progress-label">0 / 0</span>
+        </div>
+
+        <!-- Document table -->
+        <div class="org-table-wrap">
+            <table class="org-table" id="org-table">
+                <thead>
+                    <tr>
+                        <th>File</th>
+                        <th>Category</th>
+                        <th>Sub</th>
+                        <th>Conf.</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="org-table-body">
+                    <tr><td colspan="5" class="org-empty">No documents scanned yet.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Category summary chips -->
+        <div id="org-category-chips" class="org-category-chips"></div>
     </div>
 
     <!-- Scripts -->
