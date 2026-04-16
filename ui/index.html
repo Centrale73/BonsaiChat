@@ -22,77 +22,49 @@
             <div id="session-list" class="session-list"></div>
         </div>
 
-        <!-- View: Settings -->
+        <!-- View: Settings (local-only — no provider/API key UI) -->
         <div id="view-settings" class="sidebar-view" style="display:none;">
+
+            <!-- Bonsai status -->
             <div class="config-section">
-                <label class="config-label">Provider</label>
-                <div class="custom-dropdown" id="provider-dropdown">
-                    <div class="dropdown-selected" data-value="bonsai" onclick="toggleProviderDropdown()">
-                        <span class="selected-text">🌿 Bonsai 8B (Local)</span>
-                    </div>
-                    <div class="dropdown-options">
-                        <div class="dropdown-option" data-value="openai"
-                            onclick="selectProvider('openai', 'OpenAI')">
-                            OpenAI</div>
-                        <div class="dropdown-option" data-value="anthropic"
-                            onclick="selectProvider('anthropic', 'Anthropic')">
-                            Anthropic</div>
-                        <div class="dropdown-option" data-value="gemini" onclick="selectProvider('gemini', 'Gemini')">
-                            Gemini
-                        </div>
-                        <div class="dropdown-option" data-value="grok" onclick="selectProvider('grok', 'Grok (xAI)')">
-                            Grok
-                            (xAI)</div>
-                        <div class="dropdown-option" data-value="groq" onclick="selectProvider('groq', 'Groq')">Groq
-                        </div>
-                        <div class="dropdown-option" data-value="openrouter"
-                            onclick="selectProvider('openrouter', 'OpenRouter')">OpenRouter</div>
-                        <div class="dropdown-option" data-value="perplexity"
-                            onclick="selectProvider('perplexity', 'Perplexity')">Perplexity</div>
-                        <div class="dropdown-option selected" data-value="bonsai"
-                            onclick="selectProvider('bonsai', '🌿 Bonsai 8B (Local)')">🌿 Bonsai 8B (Local)</div>
-                    </div>
+                <label class="config-label">Local Model</label>
+                <div class="bonsai-status-bar" id="bonsai-status-bar">
+                    <span id="bonsai-status-dot" class="status-dot status-offline"></span>
+                    <span id="bonsai-status-text">Setting up…</span>
                 </div>
-                <input type="hidden" id="provider-select" value="bonsai">
+                <button id="btn-bonsai-retry" class="btn-bonsai-retry" style="display:none;"
+                    onclick="retryBonsaiSetup()">↺ Retry</button>
 
-                <label class="config-label">Model ID (Optional)</label>
-                <input type="text" id="model-input" class="config-input" placeholder="e.g. gpt-4o"
-                    onchange="updateModel()">
-
-                <!-- Cloud provider: API Key input -->
-                <div id="cloud-api-section" style="display:none;">
-                    <label class="config-label">API Key</label>
-                    <input type="password" id="api-key" class="config-input" placeholder="sk-...">
-                    <button class="btn-save" onclick="saveKey()">Save Configuration</button>
-                </div>
-
-                <!-- Local model: Bonsai panel (shown when bonsai is selected) -->
-                <div id="bonsai-panel">
-                    <div class="bonsai-status-bar" id="bonsai-status-bar">
-                        <span id="bonsai-status-dot" class="status-dot status-offline"></span>
-                        <span id="bonsai-status-text">Setting up…</span>
-                    </div>
-                    <button id="btn-bonsai-retry" class="btn-bonsai-retry" style="display:none;"
-                        onclick="retryBonsaiSetup()">↺ Retry</button>
-                </div>
+                <!-- Download button — shown only when model is missing -->
+                <button id="btn-download-model" class="btn-download" style="display:none;"
+                    onclick="startModelDownload()">⬇ Download Model</button>
             </div>
+
+            <!-- HF repo override (advanced) -->
+            <div class="config-section" id="hf-config-section" style="display:none;">
+                <label class="config-label">HF Repo (advanced)</label>
+                <input type="text" id="hf-repo-input" class="config-input" placeholder="org/repo">
+                <label class="config-label">Filename</label>
+                <input type="text" id="hf-file-input" class="config-input" placeholder="model.gguf">
+                <button class="btn-save" onclick="saveHfConfig()">Save</button>
+            </div>
+            <button class="btn-link" onclick="toggleHfConfig()">Advanced ▾</button>
 
             <hr class="divider">
 
+            <!-- Knowledge Base -->
             <h4 style="margin:0 0 12px 0; font-size:0.9rem; font-weight:600">Knowledge Base</h4>
             <div id="drop-zone" onclick="document.getElementById('file-input').click()">
                 Drag PDF/CSV here<br>or Click to upload
             </div>
             <input type="file" id="file-input" multiple style="display:none" onchange="handleFileSelect(event)">
             <div id="sidebar-file-list" style="margin-top:12px"></div>
-
             <button class="btn-clear" onclick="clearRag()">Clear Context</button>
         </div>
     </div>
 
     <!-- Sidebar Toggles -->
     <div class="sidebar-toggle-group">
-        <!-- Chats Toggle (Hamburger) -->
         <div class="sidebar-toggle-tab" onclick="toggleSidebar('chats')" id="tab-chats" title="Chats">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                 stroke-linecap="round" stroke-linejoin="round">
@@ -101,7 +73,6 @@
                 <line x1="3" y1="18" x2="21" y2="18"></line>
             </svg>
         </div>
-        <!-- Settings Toggle (Key) -->
         <div class="sidebar-toggle-tab" onclick="toggleSidebar('settings')" id="tab-settings" title="Settings">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                 stroke-linecap="round" stroke-linejoin="round">
@@ -119,7 +90,7 @@
             <div class="header-controls">
                 <button class="new-chat-btn" onclick="newChat()" title="Start a new conversation">+ New Chat</button>
                 <span>Multi-Agent:</span>
-                <input type="checkbox" id="agent-toggle" onchange="toggleAgents()">
+                <input type="checkbox" id="agent-toggle" checked onchange="toggleAgents()">
             </div>
         </div>
 
@@ -128,7 +99,7 @@
         <div class="input-container">
             <div id="file-list"></div>
             <div class="input-box">
-                <input type="text" id="user-input" placeholder="Ask your agent..." onkeypress="handleEnter(event)">
+                <input type="text" id="user-input" placeholder="Ask your agent…" onkeypress="handleEnter(event)">
                 <button class="send-btn" onclick="sendPrompt()">↑</button>
             </div>
         </div>
@@ -136,25 +107,26 @@
 
     <!-- Checkpoint Sidebar (Right) -->
     <div id="checkpoint-sidebar">
-        <div class="checkpoint-blocks" id="checkpoint-blocks">
-            <!-- Blocks generated dynamically for each AI answer -->
-        </div>
+        <div class="checkpoint-blocks" id="checkpoint-blocks"></div>
     </div>
 
-    <!-- First-run Bonsai setup overlay (shown during model download) -->
+    <!-- First-run / model-download overlay -->
     <div id="bonsai-setup-overlay">
         <div class="setup-overlay-inner">
             <div class="setup-leaf">🌿</div>
             <h2 class="setup-heading">Setting up Bonsai AI</h2>
-            <p class="setup-sub">Downloading the model — this only happens once.<br>After this, Bonsai runs fully offline, forever.</p>
+            <p class="setup-sub" id="setup-overlay-sub">Loading model — this only happens once.<br>
+                After this, Bonsai runs fully offline, forever.</p>
             <div class="progress-bar-bg setup-progress-bar">
                 <div class="progress-bar-fill" id="setup-overlay-fill" style="width:0%"></div>
             </div>
             <div id="setup-overlay-label" class="setup-progress-label">Preparing…</div>
+            <!-- Shown when model is absent and needs downloading -->
+            <button id="btn-overlay-download" class="btn-download" style="display:none;"
+                onclick="startModelDownload()">⬇ Download Model (~1 GB)</button>
         </div>
     </div>
 
-    <!-- Scripts -->
     <script src="anime.min.js"></script>
     <script src="marked.min.js"></script>
     <script src="js/app.js"></script>

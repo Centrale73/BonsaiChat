@@ -1,16 +1,20 @@
 """
-bonsai_agent.py — Agno agent and RAG knowledge base for BonsaiChat.
+bonsai_agent.py — Agno agent + RAG knowledge base for BonsaiChat.
 
-Extracted from the original BonsaiChat.py monolith so that api/bridge.py
-can import it lazily (after the llama-server is already running).
+agent-zero-features branch additions
+─────────────────────────────────────
+• WebSearchTools  — DuckDuckGo web search (no API key required)
+• CodeExecTools   — sandboxed Python execution
+• SubAgentTools   — Agent Zero-style sub-task delegation
 """
+
+from __future__ import annotations
 
 import os
 from typing import List, Optional
 
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
-from agno.models.llama_cpp import LlamaCpp
 from agno.memory import MemoryManager
 from agno.knowledge.knowledge import Knowledge
 from agno.vectordb.lancedb import LanceDb
@@ -19,10 +23,15 @@ from agno.knowledge.reader.pdf_reader import PDFReader
 from agno.knowledge.reader.csv_reader import CSVReader
 from agno.knowledge.reader.text_reader import TextReader
 from agno.knowledge.chunking.recursive import RecursiveChunking
+from agno.models.llama_cpp import LlamaCpp
 
-# ---------------------------------------------------------------------------
-# Paths & config
-# ---------------------------------------------------------------------------
+from tools.web_search import WebSearchTools
+from tools.code_exec import CodeExecTools
+from tools.subordinate_agent import SubAgentTools
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Paths
+# ─────────────────────────────────────────────────────────────────────────────
 
 _base_dir = os.path.dirname(os.path.abspath(__file__))
 _app_data = os.path.join(_base_dir, "memory_data")
@@ -33,14 +42,14 @@ DB_FILE   = os.path.join(_app_data, "bonsaichat_memory.db")
 
 DEFAULT_CHUNKER = RecursiveChunking(chunk_size=1000, overlap=150)
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # Singletons
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
-_knowledge: Optional[Knowledge] = None
-_db: Optional[SqliteDb] = None
+_knowledge:      Optional[Knowledge]     = None
+_db:             Optional[SqliteDb]      = None
 _memory_manager: Optional[MemoryManager] = None
-_agent: Optional[Agent] = None          # single agent reused across sessions
+_agent:          Optional[Agent]         = None
 
 
 def _get_db() -> SqliteDb:
@@ -79,60 +88,69 @@ def _get_knowledge() -> Knowledge:
     return _knowledge
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# Agent init
+# ─────────────────────────────────────────────────────────────────────────────
 
 def init_agent() -> None:
     """
-    Build the Agno agent.  Called once by the bridge after the llama-server
-    reports it is ready.  Safe to call multiple times — subsequent calls are
-    no-ops.
+    Build the Agno agent with all tools.  Called once by the bridge after
+    llama-server is ready.  Subsequent calls are no-ops.
     """
     global _agent
     if _agent is not None:
         return
 
+    model     = LlamaCpp(id="bonsai-8b", base_url="http://127.0.0.1:8081/v1")
+    knowledge = _get_knowledge()
+
     _agent = Agent(
-        model=LlamaCpp(
-            id="bonsai-8b",
-            base_url="http://127.0.0.1:8081/v1",
-        ),
+        model=model,
         db=_get_db(),
         memory_manager=_get_memory_manager(),
         update_memory_on_run=True,
         add_memories_to_context=True,
         add_history_to_context=True,
         instructions=(
-            "You are a helpful and intelligent assistant with access to uploaded "
-            "documents. Format all mathematical equations using proper LaTeX syntax "
-            "(e.g., $$...$$ for block equations)."
+            "You are an intelligent local assistant with access to:\n"
+            "• Your uploaded knowledge base (RAG)\n"
+            "• Web search via DuckDuckGo\n"
+            "• Python code execution\n"
+            "• Sub-agent delegation for focused sub-tasks\n\n"
+            "Use tools proactively to give accurate answers.\n"
+            "Format mathematical equations with LaTeX ($$...$$).\n"
+            "When delegating to a sub-agent, give it a complete, self-contained task."
         ),
-        knowledge=_get_knowledge(),
+        knowledge=knowledge,
         search_knowledge=True,
+        tools=[
+            WebSearchTools(),
+            CodeExecTools(),
+            SubAgentTools(parent_model=model, db=_get_db(), knowledge=knowledge),
+        ],
         markdown=True,
+        show_tool_calls=True,
     )
 
 
 def get_agent(session_id: str) -> Agent:
-    """Return the global agent, initialising it if necessary."""
     if _agent is None:
         init_agent()
-    # Agno agents carry session context via the DB; just tag the run
-    _agent.session_id = session_id
+    _agent.session_id = session_id  # type: ignore[union-attr]
     return _agent
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# RAG helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
 def ingest_files(files: List[dict]) -> bool:
-    """
-    Accept a list of dicts: [{"name": str, "data": bytes}, ...]
-    Writes each to a temp file, ingests into the vector DB, then removes it.
-    """
     import tempfile
     ingested = 0
     for f in files:
-        name: str = f["name"]
+        name: str   = f["name"]
         data: bytes = f["data"]
+        tmp_path: Optional[str] = None
         try:
             suffix = os.path.splitext(name)[1].lower()
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -147,7 +165,6 @@ def ingest_files(files: List[dict]) -> bool:
                 reader = TextReader(chunking_strategy=DEFAULT_CHUNKER)
             else:
                 print(f"[BonsaiAgent] Unsupported file type: {name}")
-                os.remove(tmp_path)
                 continue
 
             _get_knowledge().insert(
@@ -158,25 +175,25 @@ def ingest_files(files: List[dict]) -> bool:
                 upsert=True,
             )
             ingested += 1
-        except Exception as e:
-            print(f"[BonsaiAgent] Error ingesting {name}: {e}")
+        except Exception as exc:
+            print(f"[BonsaiAgent] Error ingesting {name}: {exc}")
         finally:
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
+            if tmp_path:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
 
     return ingested > 0
 
 
 def clear_knowledge_base() -> bool:
-    """Drop and recreate the vector DB table."""
     try:
         vdb = _get_knowledge().vector_db
         if vdb.exists():
             vdb.drop()
         vdb.create()
         return True
-    except Exception as e:
-        print(f"[BonsaiAgent] Error clearing knowledge base: {e}")
+    except Exception as exc:
+        print(f"[BonsaiAgent] Error clearing knowledge base: {exc}")
         return False

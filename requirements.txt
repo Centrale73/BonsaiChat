@@ -1,3 +1,5 @@
+# BonsaiChat — agent-zero-features branch
+# Core
 agno
 aiofiles
 pywebview
@@ -9,3 +11,10 @@ pypdf
 lancedb
 fastembed
 pandas
+
+# agent-zero-features additions
+duckduckgo-search      # web search tool — no API key needed
+huggingface-hub        # auto model download
+
+# Build (optional — only needed for .exe packaging)
+# pyinstaller

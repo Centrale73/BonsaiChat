@@ -1141,3 +1141,51 @@ body {
     background: rgba(255, 255, 255, 0.07);
     color: #ffffff;
 }
+
+/* ── agent-zero-features additions ─────────────────────────────── */
+
+.btn-download {
+    display: block;
+    width: 100%;
+    margin-top: 10px;
+    padding: 8px 14px;
+    background: #2a6496;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.btn-download:hover { background: #1e4f77; }
+
+.btn-link {
+    background: none;
+    border: none;
+    color: var(--accent, #4caf7d);
+    font-size: 0.78rem;
+    cursor: pointer;
+    padding: 4px 0;
+    text-align: left;
+}
+.btn-link:hover { text-decoration: underline; }
+
+.btn-save {
+    display: block;
+    width: 100%;
+    margin-top: 8px;
+    padding: 7px 12px;
+    background: var(--accent, #4caf7d);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+.btn-save:hover { filter: brightness(1.1); }
+
+/* Missing-model overlay sub-text */
+#setup-overlay-sub { font-size: 0.9rem; color: #ccc; margin-bottom: 18px; }
+
+/* Download button inside overlay */
+#btn-overlay-download { margin-top: 16px; width: auto; padding: 10px 24px; font-size: 1rem; }
