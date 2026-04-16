@@ -129,7 +129,6 @@ def init_agent() -> None:
             SubAgentTools(parent_model=model, db=_get_db(), knowledge=knowledge),
         ],
         markdown=True,
-        show_tool_calls=True,
     )
 
 
