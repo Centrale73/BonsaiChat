@@ -9,3 +9,4 @@ pypdf
 lancedb
 fastembed
 pandas
+requests

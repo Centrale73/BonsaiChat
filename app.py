@@ -41,6 +41,15 @@ def _on_exit():
         pass
 
 
+def get_resource_path(relative_path: str) -> str:
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, relative_path)
+
+
 if __name__ == '__main__':
     # Kick off DB init in background immediately.
     init_thread = threading.Thread(target=_background_init, daemon=True, name="bg-init")
@@ -49,11 +58,11 @@ if __name__ == '__main__':
     from api.bridge import ApiBridge
     api = ApiBridge()
 
-    base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
-    html_path = os.path.join(base_path, "ui", "index.html")
+    html_path = get_resource_path(os.path.join("ui", "index.html"))
+
 
     window = webview.create_window(
-        "BonsaiChat",
+        "Paramodus",
         html_path,
         js_api=api,
         width=1100,

@@ -6,6 +6,7 @@ can import it lazily (after the llama-server is already running).
 """
 
 import os
+import tempfile
 from typing import List, Optional
 
 from agno.agent import Agent
@@ -32,6 +33,12 @@ LANCE_URI = os.path.join(_app_data, "lancedb")
 DB_FILE   = os.path.join(_app_data, "bonsaichat_memory.db")
 
 DEFAULT_CHUNKER = RecursiveChunking(chunk_size=1000, overlap=150)
+
+BASE_INSTRUCTIONS = (
+    "You are a helpful and intelligent assistant with access to uploaded "
+    "documents. Format all mathematical equations using proper LaTeX syntax "
+    "(e.g., $$...$$ for block equations)."
+)
 
 # ---------------------------------------------------------------------------
 # Singletons
@@ -103,11 +110,7 @@ def init_agent() -> None:
         update_memory_on_run=True,
         add_memories_to_context=True,
         add_history_to_context=True,
-        instructions=(
-            "You are a helpful and intelligent assistant with access to uploaded "
-            "documents. Format all mathematical equations using proper LaTeX syntax "
-            "(e.g., $$...$$ for block equations)."
-        ),
+        instructions=BASE_INSTRUCTIONS,
         knowledge=_get_knowledge(),
         search_knowledge=True,
         markdown=True,
@@ -122,16 +125,49 @@ def get_agent(session_id: str, language: str = 'en') -> Agent:
     _agent.session_id = session_id
     
     # Update language instructions
-    base_instructions = "You are a helpful and intelligent assistant with access to uploaded documents. Format all mathematical equations using proper LaTeX syntax (e.g., $$...$$ for block equations)."
-    
     if language == 'fr':
-        _agent.instructions = base_instructions + " You MUST reply entirely in French (Français)."
+        _agent.instructions = f"{BASE_INSTRUCTIONS} You MUST reply entirely in French (Français)."
     elif language == 'es':
-        _agent.instructions = base_instructions + " You MUST reply entirely in Spanish (Español)."
+        _agent.instructions = f"{BASE_INSTRUCTIONS} You MUST reply entirely in Spanish (Español)."
     else:
-        _agent.instructions = base_instructions
+        _agent.instructions = BASE_INSTRUCTIONS
         
     return _agent
+
+
+def _get_reader(file_name: str):
+    """Factory for Agno readers based on file extension."""
+    suffix = os.path.splitext(file_name)[1].lower()
+    if suffix == ".pdf":
+        return PDFReader(chunking_strategy=DEFAULT_CHUNKER)
+    elif suffix == ".csv":
+        return CSVReader(chunking_strategy=DEFAULT_CHUNKER)
+    elif suffix in (".txt", ".md", ".py", ".js", ".json"):
+        return TextReader(chunking_strategy=DEFAULT_CHUNKER)
+    return None
+
+
+def ingest_local_file(file_path: str) -> bool:
+    """Ingest a single file from a local disk path."""
+    name = os.path.basename(file_path)
+    reader = _get_reader(name)
+    if not reader:
+        print(f"[BonsaiAgent] Unsupported file type: {name}")
+        return False
+    
+    try:
+        _get_knowledge().insert(
+            path=file_path,
+            name=name,
+            reader=reader,
+            metadata={"filename": name},
+            upsert=True,
+        )
+        return True
+    except Exception as e:
+        print(f"[BonsaiAgent] Error ingesting {name}: {e}")
+        return False
+
 
 
 def ingest_files(files: List[dict]) -> bool:
@@ -139,27 +175,21 @@ def ingest_files(files: List[dict]) -> bool:
     Accept a list of dicts: [{"name": str, "data": bytes}, ...]
     Writes each to a temp file, ingests into the vector DB, then removes it.
     """
-    import tempfile
     ingested = 0
     for f in files:
         name: str = f["name"]
         data: bytes = f["data"]
+        tmp_path = None
         try:
+            reader = _get_reader(name)
+            if not reader:
+                print(f"[BonsaiAgent] Unsupported file type: {name}")
+                continue
+
             suffix = os.path.splitext(name)[1].lower()
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                 tmp.write(data)
                 tmp_path = tmp.name
-
-            if suffix == ".pdf":
-                reader = PDFReader(chunking_strategy=DEFAULT_CHUNKER)
-            elif suffix == ".csv":
-                reader = CSVReader(chunking_strategy=DEFAULT_CHUNKER)
-            elif suffix in (".txt", ".md", ".py", ".js", ".json"):
-                reader = TextReader(chunking_strategy=DEFAULT_CHUNKER)
-            else:
-                print(f"[BonsaiAgent] Unsupported file type: {name}")
-                os.remove(tmp_path)
-                continue
 
             _get_knowledge().insert(
                 path=tmp_path,
@@ -172,10 +202,11 @@ def ingest_files(files: List[dict]) -> bool:
         except Exception as e:
             print(f"[BonsaiAgent] Error ingesting {name}: {e}")
         finally:
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
+            if tmp_path:
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
 
     return ingested > 0
 

@@ -9,12 +9,24 @@ backend (llama-server + Agno + LanceDB RAG — no cloud provider switching).
 import base64
 import json
 import os
+import requests
 import subprocess
 import sys
 import threading
-import time
 import uuid
 from typing import Optional
+
+
+def get_resource_path(relative_path: str) -> str:
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        # For bridge.py located in api/, we go up one level
+        base_path = os.path.dirname(os.path.abspath(__file__ + "/.."))
+    return os.path.join(base_path, relative_path)
+
 
 
 # ---------------------------------------------------------------------------
@@ -35,17 +47,50 @@ def _agent_module():
 # Server path helpers
 # ---------------------------------------------------------------------------
 
-def _get_base_dir() -> str:
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__ + "/.."))
-
-
 def _get_server_paths():
-    base = _get_base_dir()
-    llama_bin = os.path.join(base, "bin", "llama-server.exe" if os.name == "nt" else "llama-server")
-    model_path = os.path.join(base, "models", "Bonsai-8B.gguf")
+    """
+    Finds the llama-server binary and the GGUF model.
+    Checks:
+    1. Local folder (for installed production apps)
+    2. _MEIPASS (for bundled assets, though we exclude large ones in Option 1)
+    3. Dev source folder
+    """
+    if getattr(sys, 'frozen', False):
+        # Running as a compiled .exe
+        exe_dir = os.path.dirname(sys.executable)
+    else:
+        # Running as a script
+        exe_dir = os.path.dirname(os.path.abspath(__file__ + "/.."))
+    
+    # --- BINARIES ---
+    # Check next to the EXE first (typical for Option 1 install)
+    local_bin = os.path.join(exe_dir, "bin", "llama-server.exe" if os.name == "nt" else "llama-server")
+    # Check internal _MEIPASS (pyinstaller bundle)
+    internal_bin = get_resource_path(os.path.join("bin", "llama-server.exe" if os.name == "nt" else "llama-server"))
+    
+    if os.path.exists(local_bin):
+        llama_bin = local_bin
+    else:
+        llama_bin = internal_bin
+
+    # --- MODELS ---
+    # Check next to the EXE first
+    local_model = os.path.join(exe_dir, "models", "Bonsai-8B.gguf")
+    # Check internal _MEIPASS
+    internal_model = get_resource_path(os.path.join("models", "Bonsai-8B.gguf"))
+    # Also check AppData for previously downloaded models
+    appdata_dir = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), "Paramodus", "models")
+    appdata_model = os.path.join(appdata_dir, "Bonsai-8B.gguf")
+    
+    if os.path.exists(local_model):
+        model_path = local_model
+    elif os.path.exists(appdata_model):
+        model_path = appdata_model
+    else:
+        model_path = internal_model
+        
     return llama_bin, model_path
+
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +139,12 @@ class ApiBridge:
 
     def set_language(self, language: str):
         self.current_language = language
+        # Update the agent if it exists
+        try:
+            agent = _agent_module().get_agent(self.current_session_id, language)
+            # instructions are updated inside get_agent()
+        except Exception:
+            pass
         return f"Language set to: {language.upper()}"
 
     # ------------------------------------------------------------------
@@ -111,7 +162,7 @@ class ApiBridge:
         return [
             {
                 "key": "bonsai-8b",
-                "name": "Bonsai 8B",
+                "name": "Paramodus 8B",
                 "description": "1-bit quantized LLM — runs entirely on CPU",
                 "downloaded": self._is_model_present(),
             }
@@ -120,6 +171,36 @@ class ApiBridge:
     def _is_model_present(self) -> bool:
         _, model_path = _get_server_paths()
         return os.path.isfile(model_path)
+
+    def _download_model(self, url: str, save_path: str, report_cb):
+        """Downloads the model while reporting progress to the UI."""
+        # Use APPDATA for downloads so they persist even if the app is re-installed or moved
+        appdata_dir = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), "Paramodus", "models")
+        os.makedirs(appdata_dir, exist_ok=True)
+        persistent_path = os.path.join(appdata_dir, os.path.basename(save_path))
+        
+        try:
+            response = requests.get(url, stream=True, timeout=30)
+            response.raise_for_status()
+            
+            total_size = int(response.headers.get('content-length', 0))
+            downloaded = 0
+            
+            with open(persistent_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total_size > 0:
+                            pct = (downloaded / total_size) * 100
+                            # Report progress every ~1% or at the end
+                            if int(pct) % 2 == 0 or downloaded == total_size:
+                                report_cb("downloading", pct, f"Downloading Model: {pct:.1f}%")
+
+            return True
+        except Exception as e:
+            report_cb("error", -1, f"Download failed: {e}")
+            return False
 
     # begin_auto_setup — called by JS on pywebviewready
     def begin_auto_setup(self, model_key: str = "bonsai-8b") -> dict:
@@ -141,10 +222,11 @@ class ApiBridge:
 
             # 2. Model check
             if not os.path.isfile(model_path):
-                _report("error", -1,
-                        f"Model not found at {model_path}. "
-                        "Place Bonsai-8B.gguf in the models/ folder.")
-                return
+                _report("downloading", 0, "Model not found. Starting download from Hugging Face...")
+                model_url = "https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/main/Bonsai-8B.gguf"
+                success = self._download_model(model_url, model_path, _report)
+                if not success:
+                    return # Error already reported by helper
 
             # 3. Start server
             _report("starting", 0, "Loading model into memory…")
@@ -191,7 +273,7 @@ class ApiBridge:
                         except Exception as e:
                             _report("error", -1, f"Agent init failed: {e}")
                             return
-                        _report("ready", 100, "Bonsai is ready")
+                        _report("ready", 100, "Paramodus is ready")
                         return
 
             except Exception as e:
@@ -209,7 +291,7 @@ class ApiBridge:
     # Stub out download methods (model is shipped or user places it manually)
     def download_bonsai(self, model_key: str = "bonsai-8b") -> dict:
         return {"status": "not_applicable",
-                "message": "BonsaiChat does not auto-download. Place the .gguf in models/."}
+                "message": "Paramodus does not auto-download. Place the .gguf in models/."}
 
     def cancel_download_bonsai(self, model_key: str = "bonsai-8b") -> dict:
         return {"status": "not_applicable"}

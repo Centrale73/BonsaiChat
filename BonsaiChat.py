@@ -8,88 +8,30 @@ import time
 import tkinter.filedialog as filedialog
 from typing import List, Optional
 
-from agno.agent import Agent
-from agno.db.sqlite import SqliteDb
-from agno.models.llama_cpp import LlamaCpp
-from agno.memory import MemoryManager
-from agno.knowledge.knowledge import Knowledge
-from agno.vectordb.lancedb import LanceDb
-from agno.knowledge.embedder.fastembed import FastEmbedEmbedder
-from agno.knowledge.reader.pdf_reader import PDFReader
-from agno.knowledge.reader.csv_reader import CSVReader
-from agno.knowledge.reader.text_reader import TextReader
-from agno.knowledge.chunking.recursive import RecursiveChunking
+import bonsai_agent
 
-# --- RAG configuration ---
-app_data = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory_data")
-os.makedirs(app_data, exist_ok=True)
-LANCE_URI = os.path.join(app_data, "lancedb")
-DEFAULT_CHUNKER = RecursiveChunking(chunk_size=1000, overlap=150)
 
-_knowledge: Optional[Knowledge] = None
-
-def _get_knowledge() -> Knowledge:
-    global _knowledge
-    if _knowledge is None:
-        _knowledge = Knowledge(
-            vector_db=LanceDb(
-                table_name="user_documents",
-                uri=LANCE_URI,
-                embedder=FastEmbedEmbedder(
-                    id="BAAI/bge-small-en-v1.5",
-                    dimensions=384,
-                ),
-            ),
-        )
-    return _knowledge
-
-def ingest_files(file_paths: List[str]) -> bool:
-    ingested_count = 0
-    for path in file_paths:
-        name = os.path.basename(path)
-        try:
-            if name.lower().endswith(".pdf"):
-                reader = PDFReader(chunking_strategy=DEFAULT_CHUNKER)
-            elif name.lower().endswith(".csv"):
-                reader = CSVReader(chunking_strategy=DEFAULT_CHUNKER)
-            elif name.lower().endswith((".txt", ".md", ".py", ".js", ".json")):
-                reader = TextReader(chunking_strategy=DEFAULT_CHUNKER)
-            else:
-                print(f"Unsupported file type: {name}")
-                continue
-
-            _get_knowledge().insert(
-                path=path,
-                name=name,
-                reader=reader,
-                metadata={"filename": name},
-                upsert=True,
-            )
-            ingested_count += 1
-        except Exception as e:
-            print(f"Error processing {name}: {e}")
-
-    return ingested_count > 0
-
-def clear_knowledge_base() -> bool:
+def get_resource_path(relative_path: str) -> str:
+    """ Get absolute path to resource, works for dev and for PyInstaller """
     try:
-        if _get_knowledge().vector_db.exists():
-            _get_knowledge().vector_db.drop()
-        _get_knowledge().vector_db.create()
-        return True
-    except Exception as e:
-        print(f"Error clearing knowledge base: {e}")
-        return False
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, relative_path)
 
-# Configure UI theme
+
+
+# --- UI configuration ---
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("green")
+
 
 class BonsaiChatApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        self.title("Bonsai Chat (1-bit LLM + RAG)")
+        self.title("Paramodus (1-bit LLM + RAG)")
         self.geometry("900x600")
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=0) # Sidebar should not expand
@@ -138,51 +80,38 @@ class BonsaiChatApp(ctk.CTk):
         self.server_process = None
         self.is_server_ready = False
         self.user_id = "local_dev_user"
-        
-        # Setup local SQLite database for persistence
-        self.db = SqliteDb(db_file="paramodus_memory.db")
-
-        # Configure the Memory Manager
-        self.memory_manager = MemoryManager(
-            db=self.db,
-            additional_instructions="Extract strictly factual statements about the user's preferences, projects, and constraints. Do not store conversational filler."
-        )
-
-        # We defer Agent initialization to start_server thread to prevent GUI lockup
         self.agent = None
+
 
         # Launch server
         threading.Thread(target=self.start_server, daemon=True).start()
 
     def init_agent(self):
         """Initialize the agent with RAG after server loads."""
-        self.agent = Agent(
-            model=LlamaCpp(
-                id="bonsai-8b", 
-                base_url="http://127.0.0.1:8081/v1" 
-            ),
-            db=self.db,
-            memory_manager=self.memory_manager,
-            update_memory_on_run=True,
-            add_memories_to_context=True,
-            add_history_to_context=True,
-            instructions="You are a helpful and intelligent assistant with access to uploaded documents. Format all mathematical equations using proper LaTeX syntax (e.g., $$...$$ for block equations).",
-            knowledge=_get_knowledge(),
-            search_knowledge=True,
-            markdown=True
-        )
+        bonsai_agent.init_agent()
+        self.agent = bonsai_agent.get_agent(self.user_id)
+
 
     def determine_paths(self):
-        if getattr(sys, 'frozen', False):
-            # Running as compiled .exe
-            base_dir = os.path.dirname(sys.executable)
+        # Look for bin/ and models/ relative to the executable or the script
+        # Note: In a professional installer, these might be siblings to the EXE
+        exe_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+        
+        # Check _MEIPASS first (for bundled assets)
+        internal_bin = get_resource_path(os.path.join("bin", "llama-server.exe"))
+        if os.path.exists(internal_bin):
+            llama_bin = internal_bin
         else:
-            # Running as script
-            base_dir = os.path.dirname(os.path.abspath(__file__))
+            llama_bin = os.path.join(exe_dir, "bin", "llama-server.exe")
+
+        internal_model = get_resource_path(os.path.join("models", "Bonsai-8B.gguf"))
+        if os.path.exists(internal_model):
+            model_path = internal_model
+        else:
+            model_path = os.path.join(exe_dir, "models", "Bonsai-8B.gguf")
             
-        llama_bin = os.path.join(base_dir, "bin", "llama-server.exe")
-        model = os.path.join(base_dir, "models", "Bonsai-8B.gguf")
-        return llama_bin, model
+        return llama_bin, model_path
+
 
     def start_server(self):
         llama_bin, model_path = self.determine_paths()
@@ -254,7 +183,7 @@ class BonsaiChatApp(ctk.CTk):
         self.append_text(user_input + "\n", "You")
         
         self.send_btn.configure(state="disabled")
-        self.append_text("", "Bonsai") # Start the AI message line
+        self.append_text("", "Paramodus") # Start the AI message line
         
         # Thread for streaming response
         threading.Thread(target=self.generate_response, args=(user_input,), daemon=True).start()
@@ -289,7 +218,8 @@ class BonsaiChatApp(ctk.CTk):
             threading.Thread(target=self._process_upload, args=(file_path,), daemon=True).start()
 
     def _process_upload(self, file_path):
-        success = ingest_files([file_path])
+        success = bonsai_agent.ingest_local_file(file_path)
+
         if success:
             self.after(0, self.append_text, f"System: ✓ Successfully ingested {os.path.basename(file_path)}\n", "System")
         else:
@@ -302,7 +232,8 @@ class BonsaiChatApp(ctk.CTk):
         threading.Thread(target=self._process_clear, daemon=True).start()
 
     def _process_clear(self):
-        success = clear_knowledge_base()
+        success = bonsai_agent.clear_knowledge_base()
+
         if success:
             self.after(0, self.append_text, "System: ✓ Knowledge base cleared successfully.\n", "System")
         else:
