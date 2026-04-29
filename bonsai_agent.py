@@ -1,48 +1,62 @@
 """
 bonsai_agent.py — Agno agent and RAG knowledge base for BonsaiChat.
 
+
 Extracted from the original BonsaiChat.py monolith so that api/bridge.py
 can import it lazily (after the llama-server is already running).
 """
 
+
 import os
 import tempfile
 from typing import List, Optional
+
 
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
 from agno.models.llama_cpp import LlamaCpp
 from agno.memory import MemoryManager
 from agno.knowledge.knowledge import Knowledge
-from agno.vectordb.lancedb import LanceDb
+from agno.vectordb.lancedb import LanceDb, SearchType
 from agno.knowledge.embedder.fastembed import FastEmbedEmbedder
 from agno.knowledge.reader.pdf_reader import PDFReader
 from agno.knowledge.reader.csv_reader import CSVReader
 from agno.knowledge.reader.text_reader import TextReader
 from agno.knowledge.chunking.recursive import RecursiveChunking
+from agno.tools.duckduckgo import DuckDuckGoTools
+
 
 # ---------------------------------------------------------------------------
 # Paths & config
 # ---------------------------------------------------------------------------
 
+
 _base_dir = os.path.dirname(os.path.abspath(__file__))
 _app_data = os.path.join(_base_dir, "memory_data")
 os.makedirs(_app_data, exist_ok=True)
 
+
 LANCE_URI = os.path.join(_app_data, "lancedb")
 DB_FILE   = os.path.join(_app_data, "bonsaichat_memory.db")
 
+
 DEFAULT_CHUNKER = RecursiveChunking(chunk_size=1000, overlap=150)
+
 
 BASE_INSTRUCTIONS = (
     "You are a helpful and intelligent assistant with access to uploaded "
     "documents. Format all mathematical equations using proper LaTeX syntax "
-    "(e.g., $$...$$ for block equations)."
+    "(e.g., $$...$$ for block equations). "
+    "You have access to a web search tool — use it when the user asks about "
+    "current events, live data, or anything that may have changed recently. "
+    "For static facts you already know, answer directly without searching."
 )
+
 
 # ---------------------------------------------------------------------------
 # Singletons
 # ---------------------------------------------------------------------------
+
 
 _knowledge: Optional[Knowledge] = None
 _db: Optional[SqliteDb] = None
@@ -50,11 +64,13 @@ _memory_manager: Optional[MemoryManager] = None
 _agent: Optional[Agent] = None          # single agent reused across sessions
 
 
+
 def _get_db() -> SqliteDb:
     global _db
     if _db is None:
         _db = SqliteDb(db_file=DB_FILE)
     return _db
+
 
 
 def _get_memory_manager() -> MemoryManager:
@@ -70,6 +86,7 @@ def _get_memory_manager() -> MemoryManager:
     return _memory_manager
 
 
+
 def _get_knowledge() -> Knowledge:
     global _knowledge
     if _knowledge is None:
@@ -77,18 +94,22 @@ def _get_knowledge() -> Knowledge:
             vector_db=LanceDb(
                 table_name="user_documents",
                 uri=LANCE_URI,
+                search_type=SearchType.hybrid,
                 embedder=FastEmbedEmbedder(
                     id="BAAI/bge-small-en-v1.5",
                     dimensions=384,
                 ),
             ),
+            contents_db=_get_db(),
         )
     return _knowledge
+
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def init_agent() -> None:
     """
@@ -99,6 +120,7 @@ def init_agent() -> None:
     global _agent
     if _agent is not None:
         return
+
 
     _agent = Agent(
         model=LlamaCpp(
@@ -113,26 +135,31 @@ def init_agent() -> None:
         instructions=BASE_INSTRUCTIONS,
         knowledge=_get_knowledge(),
         search_knowledge=True,
+        add_knowledge_to_context=True,
         markdown=True,
+        tools=[DuckDuckGoTools()],
+        tool_call_limit=3,
     )
 
 
-def get_agent(session_id: str, language: str = 'en') -> Agent:
-    """Return the global agent, initialising it if necessary, and update its language."""
+
+def get_agent() -> Agent:
+    """Return the global agent, initialising it if necessary."""
     if _agent is None:
         init_agent()
-    # Agno agents carry session context via the DB; just tag the run
-    _agent.session_id = session_id
-    
-    # Update language instructions
-    if language == 'fr':
-        _agent.instructions = f"{BASE_INSTRUCTIONS} You MUST reply entirely in French (Français)."
-    elif language == 'es':
-        _agent.instructions = f"{BASE_INSTRUCTIONS} You MUST reply entirely in Spanish (Español)."
-    else:
-        _agent.instructions = BASE_INSTRUCTIONS
-        
     return _agent
+
+
+
+def get_run_kwargs(session_id: str, language: str = 'en') -> dict:
+    """Return the dynamic kwargs needed by agent.arun for a given session and language."""
+    kwargs = {"session_id": session_id}
+    if language == 'fr':
+        kwargs["additional_instructions"] = "You MUST reply entirely in French (Français)."
+    elif language == 'es':
+        kwargs["additional_instructions"] = "You MUST reply entirely in Spanish (Español)."
+    return kwargs
+
 
 
 def _get_reader(file_name: str):
@@ -147,16 +174,17 @@ def _get_reader(file_name: str):
     return None
 
 
-def ingest_local_file(file_path: str) -> bool:
-    """Ingest a single file from a local disk path."""
+
+async def aingest_local_file(file_path: str) -> bool:
+    """Ingest a single file from a local disk path asynchronously."""
     name = os.path.basename(file_path)
     reader = _get_reader(name)
     if not reader:
         print(f"[BonsaiAgent] Unsupported file type: {name}")
         return False
-    
+
     try:
-        _get_knowledge().insert(
+        await _get_knowledge().ainsert(
             path=file_path,
             name=name,
             reader=reader,
@@ -170,10 +198,11 @@ def ingest_local_file(file_path: str) -> bool:
 
 
 
-def ingest_files(files: List[dict]) -> bool:
+
+async def aingest_files(files: List[dict]) -> bool:
     """
     Accept a list of dicts: [{"name": str, "data": bytes}, ...]
-    Writes each to a temp file, ingests into the vector DB, then removes it.
+    Writes each to a temp file, ingests into the vector DB asynchronously, then removes it.
     """
     ingested = 0
     for f in files:
@@ -186,12 +215,14 @@ def ingest_files(files: List[dict]) -> bool:
                 print(f"[BonsaiAgent] Unsupported file type: {name}")
                 continue
 
+
             suffix = os.path.splitext(name)[1].lower()
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                 tmp.write(data)
                 tmp_path = tmp.name
 
-            _get_knowledge().insert(
+
+            await _get_knowledge().ainsert(
                 path=tmp_path,
                 name=name,
                 reader=reader,
@@ -208,16 +239,31 @@ def ingest_files(files: List[dict]) -> bool:
                 except Exception:
                     pass
 
+
     return ingested > 0
 
 
+
 def clear_knowledge_base() -> bool:
-    """Drop and recreate the vector DB table."""
+    """Drop and recreate the vector DB table, and clear the contents DB."""
     try:
+        import sqlite3
         vdb = _get_knowledge().vector_db
         if vdb.exists():
             vdb.drop()
         vdb.create()
+
+        # Clear contents db
+        with sqlite3.connect(DB_FILE) as conn:
+            try:
+                conn.execute("DELETE FROM agno_knowledge_content")
+            except Exception:
+                pass
+            try:
+                conn.execute("DELETE FROM agno_knowledge_contents")
+            except Exception:
+                pass
+
         return True
     except Exception as e:
         print(f"[BonsaiAgent] Error clearing knowledge base: {e}")
