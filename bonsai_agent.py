@@ -142,24 +142,22 @@ def init_agent() -> None:
     )
 
 
-
-def get_agent() -> Agent:
-    """Return the global agent, initialising it if necessary."""
+def get_agent(session_id: str, language: str = 'en') -> Agent:
+    """Return the global agent, initialising it if necessary, and update its language."""
     if _agent is None:
         init_agent()
-    return _agent
-
-
-
-def get_run_kwargs(session_id: str, language: str = 'en') -> dict:
-    """Return the dynamic kwargs needed by agent.arun for a given session and language."""
-    kwargs = {"session_id": session_id}
+    # Agno agents carry session context via the DB; just tag the run
+    _agent.session_id = session_id
+    
+    # Update language instructions
     if language == 'fr':
         kwargs["additional_instructions"] = "You MUST reply entirely in French (Français)."
     elif language == 'es':
-        kwargs["additional_instructions"] = "You MUST reply entirely in Spanish (Español)."
-    return kwargs
-
+        _agent.instructions = f"{BASE_INSTRUCTIONS} You MUST reply entirely in Spanish (Español)."
+    else:
+        _agent.instructions = BASE_INSTRUCTIONS
+        
+    return _agent
 
 
 def _get_reader(file_name: str):
@@ -174,9 +172,8 @@ def _get_reader(file_name: str):
     return None
 
 
-
-async def aingest_local_file(file_path: str) -> bool:
-    """Ingest a single file from a local disk path asynchronously."""
+def ingest_local_file(file_path: str) -> bool:
+    """Ingest a single file from a local disk path."""
     name = os.path.basename(file_path)
     reader = _get_reader(name)
     if not reader:
@@ -198,8 +195,7 @@ async def aingest_local_file(file_path: str) -> bool:
 
 
 
-
-async def aingest_files(files: List[dict]) -> bool:
+def ingest_files(files: List[dict]) -> bool:
     """
     Accept a list of dicts: [{"name": str, "data": bytes}, ...]
     Writes each to a temp file, ingests into the vector DB asynchronously, then removes it.
@@ -221,8 +217,7 @@ async def aingest_files(files: List[dict]) -> bool:
                 tmp.write(data)
                 tmp_path = tmp.name
 
-
-            await _get_knowledge().ainsert(
+            _get_knowledge().insert(
                 path=tmp_path,
                 name=name,
                 reader=reader,
@@ -252,18 +247,6 @@ def clear_knowledge_base() -> bool:
         if vdb.exists():
             vdb.drop()
         vdb.create()
-
-        # Clear contents db
-        with sqlite3.connect(DB_FILE) as conn:
-            try:
-                conn.execute("DELETE FROM agno_knowledge_content")
-            except Exception:
-                pass
-            try:
-                conn.execute("DELETE FROM agno_knowledge_contents")
-            except Exception:
-                pass
-
         return True
     except Exception as e:
         print(f"[BonsaiAgent] Error clearing knowledge base: {e}")
