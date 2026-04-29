@@ -1,0 +1,20 @@
+[
+  {
+    "test": "L1-explicit",
+    "tool_fired": true,
+    "elapsed_s": 12.34,
+    "content": "Here are the latest weather updates for Montreal today:\n\n1. **[The Weather Network](https://www.theweathernetwork.com/en/city/ca/quebec/montreal/current)**  \n   Get Montr\\u00e9al, QC current weather report with temperature, feels like, wind, humidity, pressure, UV, and more.\n\n2. **[Easeweather](http"
+  },
+  {
+    "test": "L2-implicit",
+    "tool_fired": true,
+    "elapsed_s": 4.07,
+    "content": "The current price of Bitcoin (BTC) is approximately **$68,153.75 USD** according to CoinMarketCap. Other sources also report similar prices, with some indicating it is around **$77,567 USD**. For the most accurate and up-to-date information, you can check the live price on platforms like CoinMarketC"
+  },
+  {
+    "test": "L4-trap",
+    "tool_fired": false,
+    "elapsed_s": 0.56,
+    "content": "The capital of France is Paris."
+  }
+]

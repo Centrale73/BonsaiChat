@@ -14,7 +14,7 @@ from agno.db.sqlite import SqliteDb
 from agno.models.llama_cpp import LlamaCpp
 from agno.memory import MemoryManager
 from agno.knowledge.knowledge import Knowledge
-from agno.vectordb.lancedb import LanceDb
+from agno.vectordb.lancedb import LanceDb, SearchType
 from agno.knowledge.embedder.fastembed import FastEmbedEmbedder
 from agno.knowledge.reader.pdf_reader import PDFReader
 from agno.knowledge.reader.csv_reader import CSVReader
@@ -77,11 +77,13 @@ def _get_knowledge() -> Knowledge:
             vector_db=LanceDb(
                 table_name="user_documents",
                 uri=LANCE_URI,
+                search_type=SearchType.hybrid,
                 embedder=FastEmbedEmbedder(
                     id="BAAI/bge-small-en-v1.5",
                     dimensions=384,
                 ),
             ),
+            contents_db=_get_db(),
         )
     return _knowledge
 
@@ -113,26 +115,26 @@ def init_agent() -> None:
         instructions=BASE_INSTRUCTIONS,
         knowledge=_get_knowledge(),
         search_knowledge=True,
+        add_knowledge_to_context=True,
         markdown=True,
     )
 
 
-def get_agent(session_id: str, language: str = 'en') -> Agent:
-    """Return the global agent, initialising it if necessary, and update its language."""
+def get_agent() -> Agent:
+    """Return the global agent, initialising it if necessary."""
     if _agent is None:
         init_agent()
-    # Agno agents carry session context via the DB; just tag the run
-    _agent.session_id = session_id
-    
-    # Update language instructions
-    if language == 'fr':
-        _agent.instructions = f"{BASE_INSTRUCTIONS} You MUST reply entirely in French (Français)."
-    elif language == 'es':
-        _agent.instructions = f"{BASE_INSTRUCTIONS} You MUST reply entirely in Spanish (Español)."
-    else:
-        _agent.instructions = BASE_INSTRUCTIONS
-        
     return _agent
+
+
+def get_run_kwargs(session_id: str, language: str = 'en') -> dict:
+    """Return the dynamic kwargs needed by agent.arun for a given session and language."""
+    kwargs = {"session_id": session_id}
+    if language == 'fr':
+        kwargs["additional_instructions"] = "You MUST reply entirely in French (Français)."
+    elif language == 'es':
+        kwargs["additional_instructions"] = "You MUST reply entirely in Spanish (Español)."
+    return kwargs
 
 
 def _get_reader(file_name: str):
@@ -147,8 +149,8 @@ def _get_reader(file_name: str):
     return None
 
 
-def ingest_local_file(file_path: str) -> bool:
-    """Ingest a single file from a local disk path."""
+async def aingest_local_file(file_path: str) -> bool:
+    """Ingest a single file from a local disk path asynchronously."""
     name = os.path.basename(file_path)
     reader = _get_reader(name)
     if not reader:
@@ -156,7 +158,7 @@ def ingest_local_file(file_path: str) -> bool:
         return False
     
     try:
-        _get_knowledge().insert(
+        await _get_knowledge().ainsert(
             path=file_path,
             name=name,
             reader=reader,
@@ -170,10 +172,10 @@ def ingest_local_file(file_path: str) -> bool:
 
 
 
-def ingest_files(files: List[dict]) -> bool:
+async def aingest_files(files: List[dict]) -> bool:
     """
     Accept a list of dicts: [{"name": str, "data": bytes}, ...]
-    Writes each to a temp file, ingests into the vector DB, then removes it.
+    Writes each to a temp file, ingests into the vector DB asynchronously, then removes it.
     """
     ingested = 0
     for f in files:
@@ -191,7 +193,7 @@ def ingest_files(files: List[dict]) -> bool:
                 tmp.write(data)
                 tmp_path = tmp.name
 
-            _get_knowledge().insert(
+            await _get_knowledge().ainsert(
                 path=tmp_path,
                 name=name,
                 reader=reader,
@@ -212,12 +214,25 @@ def ingest_files(files: List[dict]) -> bool:
 
 
 def clear_knowledge_base() -> bool:
-    """Drop and recreate the vector DB table."""
+    """Drop and recreate the vector DB table, and clear the contents DB."""
     try:
+        import sqlite3
         vdb = _get_knowledge().vector_db
         if vdb.exists():
             vdb.drop()
         vdb.create()
+        
+        # Clear contents db
+        with sqlite3.connect(DB_FILE) as conn:
+            try:
+                conn.execute("DELETE FROM agno_knowledge_content")
+            except Exception:
+                pass
+            try:
+                conn.execute("DELETE FROM agno_knowledge_contents")
+            except Exception:
+                pass
+                
         return True
     except Exception as e:
         print(f"[BonsaiAgent] Error clearing knowledge base: {e}")

@@ -10,3 +10,5 @@ lancedb
 fastembed
 pandas
 requests
+tantivy
+ddgs

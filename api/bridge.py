@@ -6,6 +6,7 @@ Adapted from Paramodus' bridge but targeting BonsaiChat's simpler, local-only
 backend (llama-server + Agno + LanceDB RAG — no cloud provider switching).
 """
 
+import asyncio
 import base64
 import json
 import os
@@ -139,12 +140,6 @@ class ApiBridge:
 
     def set_language(self, language: str):
         self.current_language = language
-        # Update the agent if it exists
-        try:
-            agent = _agent_module().get_agent(self.current_session_id, language)
-            # instructions are updated inside get_agent()
-        except Exception:
-            pass
         return f"Language set to: {language.upper()}"
 
     # ------------------------------------------------------------------
@@ -321,7 +316,7 @@ class ApiBridge:
                 processed.append({"name": name, "data": data})
                 self.uploaded_filenames.append(name)
 
-            success = _agent_module().ingest_files(processed)
+            success = asyncio.run(_agent_module().aingest_files(processed))
             if success:
                 return {"status": "success", "files": list(set(self.uploaded_filenames))}
             return {"status": "error", "message": "Failed to ingest files"}
@@ -352,21 +347,25 @@ class ApiBridge:
         t.start()
 
     def _run_chat(self, user_text: str, target_id: str):
+        asyncio.run(self._arun_chat(user_text, target_id))
+
+    async def _arun_chat(self, user_text: str, target_id: str):
         try:
-            agent = _agent_module().get_agent(self.current_session_id, self.current_language)
+            agent = _agent_module().get_agent()
+            run_kwargs = _agent_module().get_run_kwargs(self.current_session_id, self.current_language)
             full_response = ""
 
-            run_response = agent.run(user_text, stream=True)
+            run_response = await agent.arun(user_text, stream=True, **run_kwargs)
 
-            if target_id and self.window:
-                self.window.evaluate_js(f"clearBubble('{target_id}')")
+            if target_id and self._window:
+                self._window.evaluate_js(f"clearBubble('{target_id}')")
 
-            for chunk in run_response:
+            async for chunk in run_response:
                 content = chunk.content if hasattr(chunk, "content") else str(chunk)
                 if content:
                     full_response += content
-                    if self.window:
-                        self.window.evaluate_js(
+                    if self._window:
+                        self._window.evaluate_js(
                             f"receiveChunk({json.dumps(content)}, '{target_id or ''}')"
                         )
 
@@ -374,12 +373,12 @@ class ApiBridge:
             save_msg("bot", full_response, self.current_session_id)
 
             tone = self._detect_tone(full_response)
-            if self.window:
-                self.window.evaluate_js(f"streamComplete({json.dumps(tone)})")
+            if self._window:
+                self._window.evaluate_js(f"streamComplete({json.dumps(tone)})")
 
         except Exception as e:
-            if self.window:
-                self.window.evaluate_js(f"receiveError({json.dumps(str(e))})")
+            if self._window:
+                self._window.evaluate_js(f"receiveError({json.dumps(str(e))})")
 
     # ------------------------------------------------------------------
     # Tone detection (carried over from Paramodus)
