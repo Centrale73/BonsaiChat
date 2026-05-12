@@ -23,6 +23,13 @@ build/
 dist/
 *.spec
 
+# Scratch / debug
+scratch/
+
 # Runtime data
 memory_data/
 *.db
+
+# Google OAuth
+token.json
+credentials.json

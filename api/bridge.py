@@ -15,6 +15,9 @@ import subprocess
 import sys
 import threading
 import uuid
+import asyncio
+import queue
+import time
 from typing import Optional
 
 
@@ -100,16 +103,29 @@ def _get_server_paths():
 
 class ApiBridge:
     def __init__(self):
-        self.window = None
-        self.current_session_id = str(uuid.uuid4())
-        self.uploaded_filenames: list[str] = []
-        self._server_process: Optional[subprocess.Popen] = None
+        self._window = None
+        self._server_process = None
         self._server_ready = False
-        self._agent = None
-        self.current_language = "en"
+        self.current_session_id = str(uuid.uuid4())
+        self.current_language = 'en'
+        self.uploaded_filenames = []
+
+        # Background Event Loop for async Agent runs
+        self._loop = asyncio.new_event_loop()
+        self._loop_thread = threading.Thread(target=self._run_event_loop, daemon=True, name="api-loop")
+        self._loop_thread.start()
+
+    def _run_event_loop(self):
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
 
     def set_window(self, window):
-        self.window = window
+        self._window = window
+
+    def on_window_closed(self):
+        """Called when window closes to stop the background loop."""
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self.stop_bonsai()
 
     # ------------------------------------------------------------------
     # Session management
@@ -200,8 +216,8 @@ class ApiBridge:
     # begin_auto_setup — called by JS on pywebviewready
     def begin_auto_setup(self, model_key: str = "bonsai-8b") -> dict:
         def _report(phase: str, pct: float, msg: str):
-            if self.window:
-                self.window.evaluate_js(
+            if self._window:
+                self._window.evaluate_js(
                     f"onBonsaiSetupProgress({json.dumps(phase)}, {pct:.2f}, {json.dumps(msg)})"
                 )
 
@@ -329,8 +345,8 @@ class ApiBridge:
 
     def start_chat_stream(self, user_text: str, target_id: str = None):
         if not self._server_ready:
-            if self.window:
-                self.window.evaluate_js(
+            if self._window:
+                self._window.evaluate_js(
                     "receiveError('Bonsai is still starting up — please wait a moment.')"
                 )
             return
@@ -339,35 +355,48 @@ class ApiBridge:
             save_msg, _, _, _ = _db_module()
             save_msg("user", user_text, self.current_session_id)
 
-        t = threading.Thread(
-            target=self._run_chat,
-            args=(user_text, target_id),
-            daemon=True,
+        # Schedule the async run in our background loop
+        asyncio.run_coroutine_threadsafe(
+            self._run_chat_async(user_text, target_id),
+            self._loop
         )
-        t.start()
 
-    def _run_chat(self, user_text: str, target_id: str):
-        asyncio.run(self._arun_chat(user_text, target_id))
-
-    async def _arun_chat(self, user_text: str, target_id: str):
+    async def _run_chat_async(self, user_text: str, target_id: str):
         try:
             agent = _agent_module().get_agent()
-            run_kwargs = _agent_module().get_run_kwargs(self.current_session_id, self.current_language)
             full_response = ""
-
+            
+            run_kwargs = _agent_module().get_run_kwargs(self.current_session_id, self.current_language)
             run_response = await agent.arun(user_text, stream=True, **run_kwargs)
 
             if target_id and self._window:
                 self._window.evaluate_js(f"clearBubble('{target_id}')")
 
+            # Batch chunks to avoid "Maximum recursion depth" in pywebview
+            chunk_buffer = ""
+            last_send_time = time.time()
+
             async for chunk in run_response:
                 content = chunk.content if hasattr(chunk, "content") else str(chunk)
                 if content:
                     full_response += content
-                    if self._window:
-                        self._window.evaluate_js(
-                            f"receiveChunk({json.dumps(content)}, '{target_id or ''}')"
-                        )
+                    chunk_buffer += content
+                    
+                    # Send every 50ms or if buffer is large
+                    if time.time() - last_send_time > 0.05 or len(chunk_buffer) > 100:
+                        if self._window:
+                            self._window.evaluate_js(
+                                f"receiveChunk({json.dumps(chunk_buffer)}, '{target_id or ''}')"
+                            )
+                        chunk_buffer = ""
+                        last_send_time = time.time()
+
+            # Send remaining buffer
+            if chunk_buffer and self._window:
+                self._window.evaluate_js(
+                    f"receiveChunk({json.dumps(chunk_buffer)}, '{target_id or ''}')"
+                )
+>>>>>>> Stashed changes
 
             save_msg, _, _, _ = _db_module()
             save_msg("bot", full_response, self.current_session_id)

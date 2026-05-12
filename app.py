@@ -22,6 +22,7 @@ import threading
 import webview
 from dotenv import load_dotenv
 
+sys.setrecursionlimit(2000)
 load_dotenv()
 
 
@@ -29,6 +30,17 @@ def _background_init():
     """Run all slow imports off the main thread so the window stays responsive."""
     from database import init_db
     init_db()
+
+    # Ensure CRM tables exist before the scheduler queries them.
+    from crm import init_crm_db, start_scheduler
+    init_crm_db()
+
+    def _on_crm_reminder(payload):
+        """Handle CRM reminders — log to console for now."""
+        print(f"[CRM Reminder] {payload['title']}")
+        print(f"  {payload['body']}")
+
+    start_scheduler(on_reminder_callback=_on_crm_reminder)
 
 
 def _on_exit():
@@ -70,6 +82,6 @@ if __name__ == '__main__':
         background_color="#0f0f1a",
     )
     api.set_window(window)
-    window.events.closed += _on_exit
+    window.events.closed += api.on_window_closed
 
     webview.start(debug=False)
