@@ -19,6 +19,13 @@
 
         <!-- View: Chats -->
         <div id="view-chats" class="sidebar-view">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <h4 style="margin:0; font-size:0.9rem; color:var(--text-muted);">Spaces</h4>
+                <button onclick="showCreateSpaceModal()" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; font-size:1.2rem;" title="Create Space">+</button>
+            </div>
+            <div id="spaces-list" class="spaces-list" style="margin-bottom: 20px;"></div>
+            
+            <h4 style="margin:0 0 10px 0; font-size:0.9rem; color:var(--text-muted);" id="chats-list-header">All Chats</h4>
             <div id="session-list" class="session-list"></div>
         </div>
 
@@ -34,6 +41,21 @@
                         <div class="dropdown-option selected" data-value="en" onclick="selectLanguage('en', 'English (EN)')">English (EN)</div>
                         <div class="dropdown-option" data-value="fr" onclick="selectLanguage('fr', 'Français (FR)')">Français (FR)</div>
                         <div class="dropdown-option" data-value="es" onclick="selectLanguage('es', 'Español (ES)')">Español (ES)</div>
+                    </div>
+                </div>
+
+                <!-- CRM Settings -->
+                <div class="config-section" style="margin-top: 20px;">
+                    <label class="config-label">CRM Integrations</label>
+                    <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px; background: rgba(255, 255, 255, 0.05); border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1);">
+                        <div>
+                            <div style="font-size: 0.85rem; font-weight: 500; color: #fff;">Google Calendar</div>
+                            <div style="font-size: 0.75rem; color: #888;">Daily + seasonal sync</div>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="crm-google-toggle" onchange="toggleGoogleCalendar()">
+                            <span class="slider"></span>
+                        </label>
                     </div>
                 </div>
 
@@ -136,6 +158,64 @@ limitations under the License.</div>
                 <div class="progress-bar-fill" id="setup-overlay-fill" style="width:0%"></div>
             </div>
             <div id="setup-overlay-label" class="setup-progress-label">Preparing…</div>
+        </div>
+    </div>
+
+    <!-- Custom Alert Modal -->
+    <div id="custom-alert-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); backdrop-filter:blur(4px); z-index:9999; justify-content:center; align-items:center; opacity:0; transition:opacity 0.2s;">
+        <div id="custom-alert" style="background:var(--surface); border:var(--glass-border); border-radius:16px; padding:24px; max-width:400px; width:90%; box-shadow:0 12px 40px rgba(0,0,0,0.4); text-align:center; transform:translateY(20px); transition:transform 0.2s;">
+            <div id="custom-alert-icon" style="font-size:2rem; margin-bottom:12px;">ℹ️</div>
+            <h3 id="custom-alert-title" style="margin:0 0 8px 0; font-size:1.2rem; font-weight:600;">Alert</h3>
+            <p id="custom-alert-msg" style="margin:0 0 24px 0; font-size:0.95rem; color:var(--text-secondary); white-space:pre-wrap; word-wrap:break-word;"></p>
+            <div style="display:flex; justify-content:center;">
+                <button id="alert-ok-btn" style="padding:10px 30px; border-radius:8px; border:none; background:var(--accent); color:white; cursor:pointer; font-size:0.9rem; font-weight:600; transition:transform 0.2s, box-shadow 0.2s;">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Confirm Modal -->
+    <div id="custom-modal-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); backdrop-filter:blur(4px); z-index:9999; justify-content:center; align-items:center; opacity:0; transition:opacity 0.2s;">
+        <div id="custom-modal" style="background:var(--surface); border:var(--glass-border); border-radius:16px; padding:24px; max-width:400px; width:90%; box-shadow:0 12px 40px rgba(0,0,0,0.4); text-align:center; transform:translateY(20px); transition:transform 0.2s;">
+            <div style="font-size:2rem; margin-bottom:12px;">⚠️</div>
+            <h3 style="margin:0 0 8px 0; font-size:1.2rem; font-weight:600;">Delete Chat</h3>
+            <p style="margin:0 0 24px 0; font-size:0.95rem; color:var(--text-secondary);">Are you sure you want to permanently delete this chat?</p>
+            
+            <div style="margin-bottom:20px; font-size:0.85rem; color:var(--text-muted); text-align:left; display:flex; align-items:center; gap:8px; justify-content:center;">
+                <input type="checkbox" id="modal-dont-show-again" style="accent-color:var(--accent); cursor:pointer;">
+                <label for="modal-dont-show-again" style="cursor:pointer;">Don't ask me again</label>
+            </div>
+
+            <div style="display:flex; justify-content:center; gap:12px;">
+                <button id="modal-cancel-btn" style="padding:10px 20px; border-radius:8px; border:1px solid rgba(255,255,255,0.1); background:transparent; color:var(--text-primary); cursor:pointer; font-size:0.9rem; transition:background 0.2s;">Cancel</button>
+                <button id="modal-confirm-btn" style="padding:10px 20px; border-radius:8px; border:none; background:rgba(239, 68, 68, 0.2); color:#ef4444; cursor:pointer; font-size:0.9rem; font-weight:600; transition:background 0.2s;">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Space Modal -->
+    <div id="create-space-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); backdrop-filter:blur(4px); z-index:9999; justify-content:center; align-items:center; opacity:0; transition:opacity 0.2s;">
+        <div id="create-space-modal" style="background:var(--surface); border:var(--glass-border); border-radius:16px; padding:24px; max-width:500px; width:90%; box-shadow:0 12px 40px rgba(0,0,0,0.4); text-align:left; transform:translateY(20px); transition:transform 0.2s;">
+            <h3 style="margin:0 0 16px 0; font-size:1.2rem; font-weight:600;">Create a Space</h3>
+            
+            <div style="margin-bottom:12px;">
+                <label style="display:block; margin-bottom:4px; font-size:0.85rem; color:var(--text-muted);">Space Name</label>
+                <input type="text" id="space-name-input" style="width:100%; padding:10px; border-radius:8px; background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.1); color:var(--text-primary); outline:none;" placeholder="e.g. Coding Projects">
+            </div>
+
+            <div style="margin-bottom:12px;">
+                <label style="display:block; margin-bottom:4px; font-size:0.85rem; color:var(--text-muted);">Description (Optional)</label>
+                <input type="text" id="space-desc-input" style="width:100%; padding:10px; border-radius:8px; background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.1); color:var(--text-primary); outline:none;" placeholder="A place for my coding work">
+            </div>
+
+            <div style="margin-bottom:24px;">
+                <label style="display:block; margin-bottom:4px; font-size:0.85rem; color:var(--text-muted);">Custom Instructions (Agent Prompt)</label>
+                <textarea id="space-inst-input" rows="4" style="width:100%; padding:10px; border-radius:8px; background:rgba(0,0,0,0.2); border:1px solid rgba(255,255,255,0.1); color:var(--text-primary); outline:none; resize:vertical; font-family:inherit;" placeholder="e.g. Always write clean, well-commented Python code."></textarea>
+            </div>
+
+            <div style="display:flex; justify-content:flex-end; gap:12px;">
+                <button id="space-cancel-btn" style="padding:10px 20px; border-radius:8px; border:1px solid rgba(255,255,255,0.1); background:transparent; color:var(--text-primary); cursor:pointer; font-size:0.9rem;">Cancel</button>
+                <button id="space-confirm-btn" style="padding:10px 20px; border-radius:8px; border:none; background:var(--accent); color:white; cursor:pointer; font-size:0.9rem; font-weight:600;">Create</button>
+            </div>
         </div>
     </div>
 

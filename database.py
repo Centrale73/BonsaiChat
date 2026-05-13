@@ -22,6 +22,22 @@ def init_db():
             conn.execute("ALTER TABLE messages ADD COLUMN session_id TEXT")
         except sqlite3.OperationalError:
             pass  # Column already exists
+            
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS spaces
+               (id TEXT PRIMARY KEY,
+                name TEXT,
+                description TEXT,
+                instructions TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"""
+        )
+        
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS sessions
+               (session_id TEXT PRIMARY KEY,
+                space_id TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"""
+        )
 
 
 def save_msg(role, content, session_id=None):
@@ -64,8 +80,10 @@ def get_all_sessions():
                 SELECT 
                     m.session_id,
                     MAX(m.timestamp) as last_active,
-                    (SELECT content FROM messages m2 WHERE m2.session_id = m.session_id AND m2.role = 'user' ORDER BY m2.id ASC LIMIT 1) as title
+                    (SELECT content FROM messages m2 WHERE m2.session_id = m.session_id AND m2.role = 'user' ORDER BY m2.id ASC LIMIT 1) as title,
+                    s.space_id
                 FROM messages m
+                LEFT JOIN sessions s ON m.session_id = s.session_id
                 WHERE m.session_id IS NOT NULL
                 GROUP BY m.session_id
                 ORDER BY last_active DESC
@@ -74,7 +92,7 @@ def get_all_sessions():
             
             sessions = []
             for r in rows:
-                sid, last_active, title = r
+                sid, last_active, title, space_id = r
                 if not title:
                     title = "New Chat"
                 elif len(title) > 30:
@@ -83,9 +101,59 @@ def get_all_sessions():
                 sessions.append({
                     "id": sid,
                     "title": title,
-                    "timestamp": last_active
+                    "timestamp": last_active,
+                    "space_id": space_id
                 })
             return sessions
         except Exception as e:
             print(f"Error getting sessions: {e}")
             return []
+
+# ------------------------------------------------------------------
+# Spaces and Session Metadata Operations
+# ------------------------------------------------------------------
+
+def create_space(space_id, name, description, instructions):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO spaces (id, name, description, instructions) VALUES (?, ?, ?, ?)",
+            (space_id, name, description, instructions)
+        )
+
+def get_spaces():
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute("SELECT id, name, description, instructions FROM spaces ORDER BY created_at ASC").fetchall()
+    return [{"id": r[0], "name": r[1], "description": r[2], "instructions": r[3]} for r in rows]
+
+def get_space(space_id):
+    with sqlite3.connect(DB_PATH) as conn:
+        r = conn.execute("SELECT id, name, description, instructions FROM spaces WHERE id = ?", (space_id,)).fetchone()
+    if r:
+        return {"id": r[0], "name": r[1], "description": r[2], "instructions": r[3]}
+    return None
+
+def update_space(space_id, name, description, instructions):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "UPDATE spaces SET name = ?, description = ?, instructions = ? WHERE id = ?",
+            (name, description, instructions, space_id)
+        )
+
+def delete_space(space_id):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM spaces WHERE id = ?", (space_id,))
+        # Orphan the sessions
+        conn.execute("UPDATE sessions SET space_id = NULL WHERE space_id = ?", (space_id,))
+
+def set_session_space(session_id, space_id):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO sessions (session_id, space_id) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET space_id=excluded.space_id",
+            (session_id, space_id)
+        )
+
+def get_session_space(session_id):
+    with sqlite3.connect(DB_PATH) as conn:
+        r = conn.execute("SELECT space_id FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+    return r[0] if r else None
+

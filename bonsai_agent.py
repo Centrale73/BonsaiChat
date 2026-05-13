@@ -202,12 +202,13 @@ def get_agent(session_id: str, language: str = 'en') -> Agent:
     
     # Update language instructions
     if language == 'fr':
-        kwargs["additional_instructions"] = "You MUST reply entirely in French (Français)."
+        _agent.instructions = f"{BASE_INSTRUCTIONS} You MUST reply entirely in French (Français)."
     elif language == 'es':
         _agent.instructions = f"{BASE_INSTRUCTIONS} You MUST reply entirely in Spanish (Español)."
     else:
         _agent.instructions = BASE_INSTRUCTIONS
         
+    return _agent
     return _agent
 
 
@@ -220,12 +221,20 @@ def reset_agent() -> None:
         _agent = None
 
 
-def get_run_kwargs(session_id: str, language: str = "en") -> dict:
+def get_run_kwargs(session_id: str, language: str = "en", space_instructions: str = "") -> dict:
     """Return the dynamic kwargs needed by agent.arun for a given session and language."""
     kwargs: dict = {"session_id": session_id}
+    
+    additional = []
     instruction = _LANGUAGE_INSTRUCTIONS.get(language)
     if instruction:
-        kwargs["additional_instructions"] = instruction
+        additional.append(instruction)
+    if space_instructions:
+        additional.append(space_instructions)
+        
+    if additional:
+        kwargs["additional_instructions"] = "\n\n".join(additional)
+        
     return kwargs
 
 # ---------------------------------------------------------------------------
@@ -284,7 +293,7 @@ def ingest_local_file(file_path: str) -> bool:
     """Synchronous wrapper for aingest_local_file."""
     return asyncio.run(aingest_local_file(file_path))
 
-def ingest_files(files: List[dict]) -> bool:
+async def aingest_files(files: List[dict]) -> bool:
     """
     Accept a list of dicts: [{"name": str, "data": bytes}, ...]
     Writes each to a temp file, ingests into the vector DB, then removes it.

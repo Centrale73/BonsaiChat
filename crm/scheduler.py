@@ -158,6 +158,9 @@ def start_scheduler(on_reminder_callback=None):
     """Start the background scheduler thread."""
     global _scheduler_thread
     if _scheduler_thread and _scheduler_thread.is_alive():
+        # If toggled on while running, initialize the OAuth flow immediately
+        if GOOGLE_CALENDAR_ENABLED and not _calendar_service:
+            _init_google_calendar()
         return
     _stop_event.clear()
     _scheduler_thread = threading.Thread(target=_scheduler_loop, args=(on_reminder_callback,), daemon=True, name="crm-scheduler")

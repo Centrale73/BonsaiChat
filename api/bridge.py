@@ -108,6 +108,7 @@ class ApiBridge:
         self._server_ready = False
         self.current_session_id = str(uuid.uuid4())
         self.current_language = 'en'
+        self.current_space_id = None
         self.uploaded_filenames = []
 
         # Background Event Loop for async Agent runs
@@ -131,8 +132,14 @@ class ApiBridge:
     # Session management
     # ------------------------------------------------------------------
 
-    def new_session(self):
+    def new_session(self, space_id=None):
         self.current_session_id = str(uuid.uuid4())
+        
+        if space_id:
+            import database
+            database.set_session_space(self.current_session_id, space_id)
+            self.current_space_id = space_id
+            
         return {"status": "success", "session_id": self.current_session_id}
 
     def list_sessions(self):
@@ -141,6 +148,8 @@ class ApiBridge:
 
     def switch_session(self, session_id: str):
         self.current_session_id = session_id
+        import database
+        self.current_space_id = database.get_session_space(session_id)
         return {"status": "success", "session_id": session_id}
 
     def get_current_session_id(self):
@@ -150,13 +159,69 @@ class ApiBridge:
         _, get_history, _, _ = _db_module()
         return get_history(self.current_session_id)
 
+    def delete_session(self, session_id: str):
+        _, _, clear_session, _ = _db_module()
+        clear_session(session_id)
+        if self.current_session_id == session_id:
+            self.new_session()
+        return {"status": "success", "session_id": session_id}
+
     # ------------------------------------------------------------------
     # Settings & Configuration
     # ------------------------------------------------------------------
 
     def set_language(self, language: str):
         self.current_language = language
-        return f"Language set to: {language.upper()}"
+        return {"status": "success"}
+
+    # ------------------------------------------------------------------
+    # Spaces management
+    # ------------------------------------------------------------------
+
+    def create_space(self, name, description, instructions):
+        import database
+        space_id = str(uuid.uuid4())
+        database.create_space(space_id, name, description, instructions)
+        return {"status": "success", "space_id": space_id}
+
+    def list_spaces(self):
+        import database
+        return database.get_spaces()
+
+    def delete_space(self, space_id):
+        import database
+        database.delete_space(space_id)
+        if self.current_space_id == space_id:
+            self.current_space_id = None
+        return {"status": "success"}
+        
+    def get_current_space_id(self):
+        return self.current_space_id
+
+    def get_crm_settings(self):
+        import crm.scheduler
+        return {"google_calendar_enabled": crm.scheduler.GOOGLE_CALENDAR_ENABLED}
+
+    def set_crm_settings(self, enabled: bool):
+        try:
+            import dotenv
+            env_file = os.path.join(os.path.dirname(os.path.abspath(__file__ + "/..")), ".env")
+            if not os.path.exists(env_file):
+                open(env_file, 'a').close()
+            dotenv.set_key(env_file, "GOOGLE_CALENDAR_ENABLED", "true" if enabled else "false")
+            os.environ["GOOGLE_CALENDAR_ENABLED"] = "true" if enabled else "false"
+            
+            import crm.scheduler
+            crm.scheduler.GOOGLE_CALENDAR_ENABLED = enabled
+            
+            # Restart scheduler if we're enabling it, so it triggers the OAuth flow or starts polling
+            if enabled:
+                from crm import start_scheduler
+                start_scheduler()
+                
+            return {"status": "success", "enabled": enabled}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
 
     # ------------------------------------------------------------------
     # Local model / server lifecycle
@@ -363,11 +428,19 @@ class ApiBridge:
 
     async def _run_chat_async(self, user_text: str, target_id: str):
         try:
-            agent = _agent_module().get_agent()
+            agent = _agent_module().get_agent(self.current_session_id, self.current_language)
             full_response = ""
             
-            run_kwargs = _agent_module().get_run_kwargs(self.current_session_id, self.current_language)
-            run_response = await agent.arun(user_text, stream=True, **run_kwargs)
+            # Fetch space instructions if any
+            import database
+            space_instructions = ""
+            if self.current_space_id:
+                space = database.get_space(self.current_space_id)
+                if space and space["instructions"]:
+                    space_instructions = space["instructions"]
+            
+            run_kwargs = _agent_module().get_run_kwargs(self.current_session_id, self.current_language, space_instructions)
+            run_response = agent.arun(user_text, stream=True, **run_kwargs)
 
             if target_id and self._window:
                 self._window.evaluate_js(f"clearBubble('{target_id}')")
@@ -396,7 +469,6 @@ class ApiBridge:
                 self._window.evaluate_js(
                     f"receiveChunk({json.dumps(chunk_buffer)}, '{target_id or ''}')"
                 )
->>>>>>> Stashed changes
 
             save_msg, _, _, _ = _db_module()
             save_msg("bot", full_response, self.current_session_id)

@@ -25,7 +25,8 @@ window.addEventListener('pywebviewready', async () => {
     setupDragAndDrop();
     setupTypingSpeedDetection();
     animateHeader();
-    loadSessionList();
+    loadSpaces(); // This will call loadSessionList() after rendering spaces
+    loadCrmSettings();
 
     // Auto-start Bonsai setup on every launch — no user action needed.
     // triggerBonsaiAutoSetup() is a no-op if the server is already running.
@@ -37,7 +38,7 @@ window.addEventListener('pywebviewready', async () => {
 // ========================================
 async function newChat() {
     // Call backend to create new session
-    const result = await window.pywebview.api.new_session();
+    const result = await window.pywebview.api.new_session(selectedSpaceId);
     if (result.status === 'success') {
         clearChatUI();
         console.log('New session started:', result.session_id);
@@ -62,7 +63,10 @@ async function loadSessionList() {
     const sessions = await window.pywebview.api.list_sessions();
     const list = document.getElementById('session-list');
 
-    if (!sessions || sessions.length === 0) {
+    // Filter by selected space
+    const filteredSessions = sessions.filter(s => s.space_id === selectedSpaceId);
+
+    if (!filteredSessions || filteredSessions.length === 0) {
         list.innerHTML = '<div class="no-sessions">No previous chats</div>';
         return;
     }
@@ -71,15 +75,18 @@ async function loadSessionList() {
     const currentId = await window.pywebview.api.get_current_session_id();
 
     let html = '';
-    sessions.forEach(session => {
+    filteredSessions.forEach(session => {
         const date = new Date(session.timestamp).toLocaleDateString();
         const activeClass = session.id === currentId ? 'active' : '';
         // Escape title to prevent XSS
         const safeTitle = session.title.replace(/</g, "&lt;").replace(/>/g, "&gt;");
         html += `
             <div class="session-item ${activeClass}" onclick="switchSession('${session.id}')">
-                <div class="session-title">${safeTitle}</div>
-                <div class="session-date">${date}</div>
+                <div class="session-info">
+                    <div class="session-title">${safeTitle}</div>
+                    <div class="session-date">${date}</div>
+                </div>
+                <button class="btn-delete-session" onclick="deleteSession(event, '${session.id}')" title="Delete chat">×</button>
             </div>
         `;
     });
@@ -95,6 +102,101 @@ async function switchSession(sessionId) {
         const history = await window.pywebview.api.load_history();
         history.forEach(msg => appendMessage(msg.role, msg.content, false));
         // Refresh list to update active state
+        loadSessionList();
+    }
+}
+
+function showConfirmModal() {
+    return new Promise((resolve) => {
+        const overlay = document.getElementById('custom-modal-overlay');
+        const modal = document.getElementById('custom-modal');
+        const cancelBtn = document.getElementById('modal-cancel-btn');
+        const confirmBtn = document.getElementById('modal-confirm-btn');
+
+        overlay.style.display = 'flex';
+        // Trigger reflow for animation
+        void overlay.offsetWidth;
+        overlay.style.opacity = '1';
+        modal.style.transform = 'translateY(0)';
+
+        const close = (result) => {
+            overlay.style.opacity = '0';
+            modal.style.transform = 'translateY(20px)';
+            setTimeout(() => {
+                overlay.style.display = 'none';
+            }, 200);
+            
+            cancelBtn.removeEventListener('click', onCancel);
+            confirmBtn.removeEventListener('click', onConfirm);
+            resolve(result);
+        };
+
+        const onCancel = () => close(false);
+        const onConfirm = () => {
+            const dontShowAgain = document.getElementById('modal-dont-show-again');
+            if (dontShowAgain && dontShowAgain.checked) {
+                localStorage.setItem("skipDeleteConfirm", "true");
+            }
+            close(true);
+        };
+
+        cancelBtn.addEventListener('click', onCancel);
+        confirmBtn.addEventListener('click', onConfirm);
+    });
+}
+
+function showAlertModal(message, title = 'Alert', icon = 'ℹ️') {
+    return new Promise((resolve) => {
+        const overlay = document.getElementById('custom-alert-overlay');
+        const modal = document.getElementById('custom-alert');
+        const okBtn = document.getElementById('alert-ok-btn');
+        const titleEl = document.getElementById('custom-alert-title');
+        const msgEl = document.getElementById('custom-alert-msg');
+        const iconEl = document.getElementById('custom-alert-icon');
+
+        titleEl.textContent = title;
+        msgEl.textContent = message;
+        iconEl.textContent = icon;
+
+        overlay.style.display = 'flex';
+        void overlay.offsetWidth;
+        overlay.style.opacity = '1';
+        modal.style.transform = 'translateY(0)';
+
+        const close = () => {
+            overlay.style.opacity = '0';
+            modal.style.transform = 'translateY(20px)';
+            setTimeout(() => {
+                overlay.style.display = 'none';
+            }, 200);
+            
+            okBtn.removeEventListener('click', close);
+            resolve();
+        };
+
+        okBtn.addEventListener('click', close);
+    });
+}
+
+async function deleteSession(event, sessionId) {
+    // Prevent the click from bubbling up to the session item
+    event.stopPropagation();
+    
+    if (localStorage.getItem("skipDeleteConfirm") !== "true") {
+        const confirmed = await showConfirmModal();
+        if (!confirmed) {
+            return;
+        }
+    }
+
+    const result = await window.pywebview.api.delete_session(sessionId);
+    if (result.status === 'success') {
+        // Find if this was the active session
+        const currentId = await window.pywebview.api.get_current_session_id();
+        if (currentId !== sessionId) {
+            // The active session was deleted, which means backend assigned a new one
+            clearChatUI();
+        }
         loadSessionList();
     }
 }
@@ -270,6 +372,40 @@ async function selectLanguage(value, label) {
     await window.pywebview.api.set_language(value);
 }
 
+// ========================================
+// CRM INTEGRATIONS
+// ========================================
+
+async function loadCrmSettings() {
+    try {
+        const settings = await window.pywebview.api.get_crm_settings();
+        const toggle = document.getElementById('crm-google-toggle');
+        if (toggle) {
+            toggle.checked = settings.google_calendar_enabled === true;
+        }
+    } catch (e) {
+        console.warn("Failed to load CRM settings", e);
+    }
+}
+
+async function toggleGoogleCalendar() {
+    const toggle = document.getElementById('crm-google-toggle');
+    const enabled = toggle.checked;
+    
+    try {
+        const result = await window.pywebview.api.set_crm_settings(enabled);
+        if (result.status === 'error') {
+            showAlertModal("Error setting CRM preference: " + result.message, "Error", "❌");
+            toggle.checked = !enabled; // revert
+        } else if (enabled) {
+            showAlertModal("Google Calendar Sync Enabled.\n\nIf this is your first time, check your web browser to complete the OAuth login flow.", "Success", "✅");
+        }
+    } catch (e) {
+        showAlertModal("Failed to update setting", "Error", "❌");
+        toggle.checked = !enabled; // revert
+    }
+}
+
 // Close dropdown when clicking outside
 document.addEventListener('click', (e) => {
     const dropdown = document.getElementById('language-dropdown');
@@ -285,7 +421,7 @@ async function clearRag() {
     const res = await window.pywebview.api.clear_rag_context();
     document.getElementById('file-list').innerHTML = '';
     document.getElementById('sidebar-file-list').innerHTML = '';
-    alert(res);
+    showAlertModal(res, "Context Cleared", "🗑️");
 }
 
 function setupDragAndDrop() {
@@ -330,7 +466,7 @@ async function processFiles(filesList) {
                 dz.innerText = "Drag PDF/CSV here\nor Click to upload";
             }, 3000);
         } else {
-            alert("Error: " + res.message);
+            showAlertModal("Error: " + res.message, "Upload Error", "❌");
             dz.innerText = "Drag PDF/CSV here\nor Click to upload";
         }
     }
@@ -449,7 +585,7 @@ function scrollToBottom() {
 }
 
 function receiveError(e) {
-    alert("Error: " + e);
+    showAlertModal("Error: " + e, "Error", "❌");
 }
 
 function streamComplete(tone) {
@@ -663,4 +799,116 @@ async function retryBonsaiSetup() {
     if (retryBtn) retryBtn.style.display = 'none';
     _bonsaiSetupTriggered = false;
     await triggerBonsaiAutoSetup();
+}
+
+// ========================================
+// SPACES MANAGEMENT
+// ========================================
+
+let currentSpaces = [];
+let selectedSpaceId = null;
+
+async function loadSpaces() {
+    try {
+        currentSpaces = await window.pywebview.api.list_spaces();
+        renderSpaces();
+    } catch (e) {
+        console.warn("Failed to load spaces", e);
+    }
+}
+
+function renderSpaces() {
+    const list = document.getElementById('spaces-list');
+    list.innerHTML = '';
+    
+    // "General" / All space
+    const genDiv = document.createElement('div');
+    genDiv.className = `space-item ${selectedSpaceId === null ? 'active' : ''}`;
+    genDiv.innerHTML = `<span>📁</span> General`;
+    genDiv.onclick = () => selectSpace(null);
+    list.appendChild(genDiv);
+
+    currentSpaces.forEach(space => {
+        const safeName = space.name.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        const safeDesc = space.description ? space.description.replace(/</g, "&lt;").replace(/>/g, "&gt;") : "";
+        
+        const div = document.createElement('div');
+        div.className = `space-item ${selectedSpaceId === space.id ? 'active' : ''}`;
+        div.title = safeDesc;
+        div.innerHTML = `
+            <span>🚀</span> <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${safeName}</span>
+            <button class="btn-delete-space" onclick="deleteSpace(event, '${space.id}')" title="Delete Space">×</button>
+        `;
+        div.onclick = () => selectSpace(space.id);
+        list.appendChild(div);
+    });
+}
+
+async function selectSpace(spaceId) {
+    selectedSpaceId = spaceId;
+    renderSpaces();
+    loadSessionList(); // reload sessions to filter if necessary
+    
+    // Start a new chat automatically in this space
+    newChat();
+}
+
+async function deleteSpace(event, spaceId) {
+    event.stopPropagation();
+    
+    // We can reuse the confirm modal or just use a standard one for now
+    if (!confirm("Are you sure you want to delete this space? The chats inside will be moved to General.")) return;
+    
+    await window.pywebview.api.delete_space(spaceId);
+    if (selectedSpaceId === spaceId) {
+        selectedSpaceId = null;
+    }
+    await loadSpaces();
+    loadSessionList();
+}
+
+function showCreateSpaceModal() {
+    document.getElementById('space-name-input').value = '';
+    document.getElementById('space-desc-input').value = '';
+    document.getElementById('space-inst-input').value = '';
+    
+    const overlay = document.getElementById('create-space-overlay');
+    const modal = document.getElementById('create-space-modal');
+    
+    overlay.style.display = 'flex';
+    void overlay.offsetWidth;
+    overlay.style.opacity = '1';
+    modal.style.transform = 'translateY(0)';
+    
+    const closeBtn = document.getElementById('space-cancel-btn');
+    const confirmBtn = document.getElementById('space-confirm-btn');
+    
+    const close = () => {
+        overlay.style.opacity = '0';
+        modal.style.transform = 'translateY(20px)';
+        setTimeout(() => overlay.style.display = 'none', 200);
+        closeBtn.removeEventListener('click', close);
+        confirmBtn.removeEventListener('click', onConfirm);
+    };
+    
+    const onConfirm = async () => {
+        const name = document.getElementById('space-name-input').value.trim();
+        const desc = document.getElementById('space-desc-input').value.trim();
+        const inst = document.getElementById('space-inst-input').value.trim();
+        
+        if (!name) {
+            showAlertModal("Space name is required.", "Error", "❌");
+            return;
+        }
+        
+        const res = await window.pywebview.api.create_space(name, desc, inst);
+        if (res.status === 'success') {
+            await loadSpaces();
+            selectSpace(res.space_id);
+            close();
+        }
+    };
+    
+    closeBtn.addEventListener('click', close);
+    confirmBtn.addEventListener('click', onConfirm);
 }
